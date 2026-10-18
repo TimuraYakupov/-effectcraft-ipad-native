@@ -1,0 +1,50 @@
+"""Packaging checks with a synthetic Mach-O header, never an installable app."""
+from pathlib import Path
+import plistlib
+import struct
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+from package_ipa import package
+
+
+class PackagingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.binary = self.root / "effectcraft/target/aarch64-apple-ios/release/effectcraft-ios"
+        self.binary.parent.mkdir(parents=True)
+        self.binary.write_bytes(struct.pack("<8I", 0xFEEDFACF, 0x0100000C, 0, 2, 0, 0, 0, 0))
+        for name in ("LICENSE-MIT", "LICENSE-APACHE", "ATTRIBUTION.md"):
+            (self.root / "effectcraft" / name).write_text("synthetic test fixture")
+
+    def test_rejects_webassembly(self):
+        self.binary.write_bytes(b"\x00asm" + bytes(64))
+        with self.assertRaisesRegex(ValueError, "ARM64"):
+            package(self.root)
+
+    @patch("package_ipa.subprocess.check_output", return_value="platform IOSSIMULATOR\n")
+    def test_rejects_simulator(self, _vtool):
+        with self.assertRaisesRegex(ValueError, "iOS device"):
+            package(self.root)
+
+    @patch("package_ipa.subprocess.check_output", return_value="platform IOS\nminos 16.0\n")
+    def test_package_layout_and_separate_identity(self, _vtool):
+        ipa = package(self.root)
+        with zipfile.ZipFile(ipa) as archive:
+            self.assertIsNone(archive.testzip())
+            prefix = "Payload/EffectCraftNative.app/"
+            info = plistlib.loads(archive.read(prefix + "Info.plist"))
+            self.assertEqual(info["CFBundleIdentifier"], "com.effectcraft.ipad.nativepreview")
+            self.assertEqual(info["UIDeviceFamily"], [2])
+            self.assertTrue(info["UIStatusBarHidden"])
+            self.assertEqual(archive.read(prefix + "EffectCraftNative"), self.binary.read_bytes())
+            self.assertEqual(archive.getinfo(prefix + "EffectCraftNative").external_attr >> 16, 0o100755)
+        self.assertTrue((self.root / "output/SHA256.json").is_file())
+
+
+if __name__ == "__main__":
+    unittest.main()

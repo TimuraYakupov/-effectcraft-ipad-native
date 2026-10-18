@@ -1,0 +1,2247 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index ce8fe123..f3109777 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1387,6 +1387,19 @@ dependencies = [
+  "thiserror 2.0.21",
+ ]
+ 
++[[package]]
++name = "effectcraft-ios"
++version = "0.10.0"
++dependencies = [
++ "effectcraft-engine",
++ "effectcraft-host",
++ "effectcraft-ui-egui",
++ "eframe",
++ "log",
++ "serde_json",
++ "winit",
++]
++
+ [[package]]
+ name = "effectcraft-keyframe"
+ version = "0.10.0"
+@@ -1667,6 +1680,7 @@ dependencies = [
+  "effectcraft-gpu",
+  "effectcraft-host",
+  "effectcraft-media",
++ "effectcraft-text",
+  "effectcraft-ui-egui",
+  "eframe",
+  "egui",
+diff --git a/apps/effectcraft-ios/Cargo.toml b/apps/effectcraft-ios/Cargo.toml
+new file mode 100644
+index 00000000..4d925267
+--- /dev/null
++++ b/apps/effectcraft-ios/Cargo.toml
+@@ -0,0 +1,19 @@
++[package]
++name = "effectcraft-ios"
++description = "Experimental native iPad frontend"
++version.workspace = true
++edition.workspace = true
++license.workspace = true
++rust-version.workspace = true
++
++[lints]
++workspace = true
++
++[dependencies]
++effectcraft-engine.workspace = true
++effectcraft-host.workspace = true
++effectcraft-ui-egui.workspace = true
++eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
++serde_json.workspace = true
++log.workspace = true
++winit = { version = "0.30", default-features = false }
+diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
+new file mode 100644
+index 00000000..fd5ad141
+--- /dev/null
++++ b/apps/effectcraft-ios/src/main.rs
+@@ -0,0 +1,66 @@
++//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
++//! eframe and the compositor share a Metal device. No WebView or WASM runtime.
++#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
++
++use effectcraft_ui_egui::EffectcraftApp;
++use serde_json::json;
++
++fn main() -> eframe::Result {
++    effectcraft_engine::logging::install();
++    effectcraft_engine::logging::install_panic_hook();
++    let mut graphics = eframe::WgpuConfiguration::default();
++    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
++        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
++        setup.instance_descriptor.flags = setup.instance_descriptor.flags.difference(eframe::wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
++        setup.device_descriptor = std::sync::Arc::new(|adapter| {
++            let mut limits = adapter.limits();
++            limits.max_texture_dimension_2d = limits.max_texture_dimension_2d.min(16384);
++            eframe::wgpu::DeviceDescriptor { label: Some("EffectCraft iPad Metal"), required_limits: limits, ..Default::default() }
++        });
++    }
++    eframe::run_native(
++        "EffectCraft Native Preview",
++        eframe::NativeOptions {
++            viewport: eframe::egui::ViewportBuilder::default().with_title("EffectCraft Native Preview").with_fullscreen(true),
++            renderer: eframe::Renderer::Wgpu,
++            // UIKit's event loop must be entered once, rather than run-on-demand.
++            run_and_return: false,
++            wgpu_options: graphics,
++            ..Default::default()
++        },
++        Box::new(|cc| {
++            #[cfg(target_os = "ios")]
++            if let Some(window) = cc.winit_window() {
++                use winit::platform::ios::WindowExtIOS;
++                window.set_prefers_status_bar_hidden(true);
++                window.set_prefers_home_indicator_hidden(true);
++            }
++            if let Some(rs) = &cc.wgpu_render_state {
++                log::info!("native iPad adapter: {:?}", rs.adapter.get_info());
++            }
++            let mut session = effectcraft_host::session();
++            // This first build is for graphics/touch verification only. Use the bundled,
++            // openly licensed synthetic project; no private files are embedded.
++            let status = match session.execute("file.openDemoProject", json!({})) {
++                Ok(_) => "Native preview: test touch, timeline and playback. File dialogs and audio are not connected yet.".to_string(),
++                Err(error) => format!("Could not open the demo: {error}"),
++            };
++            let mut app = EffectcraftApp::new(session);
++            app.ui.start_screen = false;
++            app.ui.status = status;
++            let failures = effectcraft_ui_egui::gpu_failure::GpuFailureBridge::new(&cc.egui_ctx);
++            if let Some(rs) = &cc.wgpu_render_state {
++                let errors = failures.clone();
++                rs.device.on_uncaptured_error(std::sync::Arc::new(move |error| {
++                    errors.report(&format!("Metal error: {error}"), false);
++                }));
++                let lost = failures.clone();
++                rs.device.set_device_lost_callback(move |reason, message| {
++                    lost.report(&format!("Metal device lost ({reason:?}): {message}"), true);
++                });
++            }
++            app.set_gpu_failure_bridge(failures);
++            Ok(Box::new(app))
++        }),
++    )
++}
+diff --git a/apps/effectcraft-web/Cargo.toml b/apps/effectcraft-web/Cargo.toml
+index 6c30f9a5..ef49f78f 100644
+--- a/apps/effectcraft-web/Cargo.toml
++++ b/apps/effectcraft-web/Cargo.toml
+@@ -26,6 +26,7 @@ effectcraft-media = { workspace = true }
+ effectcraft-export = { workspace = true }
+ effectcraft-expr = { workspace = true }
+ effectcraft-ui-egui = { workspace = true }
++effectcraft-text = { workspace = true }
+ egui = { workspace = true }
+ eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
+ log = { workspace = true }
+diff --git a/apps/effectcraft-web/js/host.js b/apps/effectcraft-web/js/host.js
+index 3db6ad35..cd7e509c 100644
+--- a/apps/effectcraft-web/js/host.js
++++ b/apps/effectcraft-web/js/host.js
+@@ -685,3 +685,46 @@ export function showDeviceLost(message, kept) {
+   box.append(title, text, detail, buttons);
+   document.body.append(box);
+ }
++
++// A valid disabled state keeps File menu entries visible during Bridge startup/errors.
++let bridgeMenuLoadRequested070 = false;
++let bridgeMenuLoadError070 = '';
++function requestBridgeMenuLoad070() {
++  if (bridgeMenuLoadRequested070 || typeof document === 'undefined') return;
++  bridgeMenuLoadRequested070 = true;
++  try {
++    const script = document.createElement('script');
++    script.id = 'ecbridge-menu-loader-070';
++    script.src = new URL('./effectcraft-bridge-ipad.070.js', location.href).href;
++    script.onerror = () => { bridgeMenuLoadError070 = 'ZIP commands could not load. Close and reopen EffectCraft.'; };
++    (document.head || document.body || document.documentElement).appendChild(script);
++  } catch (error) {
++    bridgeMenuLoadError070 = 'ZIP commands unavailable: ' + (error?.message || String(error));
++  }
++}
++export function bridgeMenuState() {
++  const fallback = {importEnabled:false,exportEnabled:false,saveEnabled:false,
++    status:bridgeMenuLoadError070 || 'ZIP commands are loading…'};
++  try {
++    const bridge = window.EffectCraftBridgeIpad;
++    if (!bridge || typeof bridge.menuState !== 'function') {
++      requestBridgeMenuLoad070();
++      return JSON.stringify(fallback);
++    }
++    const state = bridge.menuState();
++    if (!state || typeof state !== 'object') throw new Error('Invalid ZIP command state');
++    return JSON.stringify({importEnabled:state.importEnabled === true,
++      exportEnabled:state.exportEnabled === true,saveEnabled:state.saveEnabled === true,
++      fontsEnabled:state.fontsEnabled === true,
++      status:typeof state.status === 'string' ? state.status : ''});
++  } catch (error) {
++    fallback.status = 'ZIP commands unavailable: ' + (error?.message || String(error));
++    return JSON.stringify(fallback);
++  }
++}
++export function bridgeMenuAction(command) {
++  const bridge = window.EffectCraftBridgeIpad;
++  if (!bridge || typeof bridge.runCommand !== 'function')
++    throw new Error('ZIP commands are not ready. Close and reopen EffectCraft.');
++  bridge.runCommand(command);
++}
+diff --git a/apps/effectcraft-web/src/api.rs b/apps/effectcraft-web/src/api.rs
+index 793e557c..37e836a7 100644
+--- a/apps/effectcraft-web/src/api.rs
++++ b/apps/effectcraft-web/src/api.rs
+@@ -83,6 +83,18 @@ pub fn add_file(name: String, data: js_sys::Uint8Array) -> String {
+     path
+ }
+ 
++/// Backend and build facts.
++#[wasm_bindgen(js_name = importFont)]
++pub fn import_font(name: String, data: js_sys::Uint8Array) -> Result<JsValue, JsValue> {
++    if data.length() as usize > crate::fonts::MAX_FONT { return Err(JsValue::from_str("Font exceeds 32 MB")); }
++    let result = crate::fonts::import(&name,data.to_vec().into()).map_err(|e| JsValue::from_str(&e))?;
++    crate::worker::invalidate_font_cache();
++    crate::post(|app| { crate::fonts::refresh(app); app.ui.status = "User fonts updated".into(); });
++    Ok(to_js(&result))
++}
++#[wasm_bindgen(js_name = userFonts)]
++pub fn user_fonts() -> JsValue { to_js(&crate::fonts::list()) }
++
+ /// Backend and build facts.
+ #[wasm_bindgen]
+ pub fn info() -> JsValue {
+@@ -91,6 +103,7 @@ pub fn info() -> JsValue {
+         v = json!({});
+     }
+     v["version"] = json!(env!("CARGO_PKG_VERSION"));
++    v["simd128"] = json!(cfg!(target_feature = "simd128"));
+     v["threads"] = json!(false);
+     v["workers"] = from_js(&crate::worker::stats());
+     v["audio"] = from_js(&crate::audio::state());
+diff --git a/apps/effectcraft-web/src/app.rs b/apps/effectcraft-web/src/app.rs
+index 1a695240..70d18143 100644
+--- a/apps/effectcraft-web/src/app.rs
++++ b/apps/effectcraft-web/src/app.rs
+@@ -15,6 +15,10 @@ use wasm_bindgen::prelude::*;
+ extern "C" {
+     #[wasm_bindgen(js_name = showDeviceLost)]
+     fn show_device_lost(message: &str, kept: bool);
++    #[wasm_bindgen(js_name = bridgeMenuState)]
++    fn bridge_menu_state() -> String;
++    #[wasm_bindgen(catch, js_name = bridgeMenuAction)]
++    fn bridge_menu_action(command: &str) -> Result<(), JsValue>;
+ }
+ 
+ /// Work for the UI thread with access to the app (posted by async tasks: picked files…).
+@@ -60,6 +64,16 @@ pub fn repaint() {
+ 
+ /// Open a project or import media from table paths (picked or dropped files).
+ pub(crate) fn open_or_import(app: &mut EffectcraftApp, paths: Vec<String>) {
++    let (font_paths,paths): (Vec<String>,Vec<String>) = paths.into_iter().partition(|p| crate::fonts::is_font_name(p));
++    if !font_paths.is_empty() {
++        let mut installed = 0; let mut errors = Vec::new();
++        for path in font_paths {
++            let result = crate::files::get(&path).ok_or_else(|| "Font file is unavailable".to_string()).and_then(|data| crate::fonts::import(&path,data));
++            match result { Ok(_) => installed += 1, Err(error) => errors.push(format!("{path}: {error}")) }
++        }
++        crate::fonts::refresh(app);
++        app.ui.status = if errors.is_empty() { format!("Imported {installed} font file(s). Select them in Character.") } else { errors.join("; ") };
++    }
+     let (projects, media): (Vec<String>, Vec<String>) = paths.into_iter().partition(|p| p.to_ascii_lowercase().ends_with(".ecproj"));
+     if let Some(p) = projects.last()
+         && let Err(e) = app.session.execute("file.open", json!({"path": p}))
+@@ -83,6 +97,7 @@ pub struct WebApp {
+     pub app: EffectcraftApp,
+     /// Keep the session snapshot (off with `?empty`).
+     pub persist: bool,
++    last_bridge_status: String,
+ }
+ 
+ impl eframe::App for WebApp {
+@@ -100,6 +115,12 @@ impl eframe::App for WebApp {
+         if !dropped.is_empty() {
+             files::read_files(dropped, |paths| post(move |app| open_or_import(app, paths)));
+         }
++        if let Some(state) = self.app.hooks.bridge_state.as_ref().and_then(|f| f())
++            && state.status != self.last_bridge_status
++        {
++            self.last_bridge_status = state.status.clone();
++            if !state.status.is_empty() { self.app.ui.status = state.status; }
++        }
+         self.app.logic(ctx, frame);
+         api::poll_replies();
+         // Render Queue outputs written this frame (here or by a worker) → downloads.
+@@ -160,6 +181,10 @@ pub fn session() -> Session {
+ 
+ /// Browser file pickers in place of the desktop's file dialogs.
+ fn install_hooks(app: &mut EffectcraftApp) {
++    app.hooks.bridge_state = Some(Box::new(|| serde_json::from_str(&bridge_menu_state()).ok()));
++    app.hooks.bridge_action = Some(Box::new(|id| {
++        bridge_menu_action(id).map_err(|e| e.as_string().unwrap_or_else(|| format!("ZIP bridge: {e:?}")))
++    }));
+     app.hooks.pick_files = Some(Box::new(|exts: &[&str]| {
+         let accept = exts.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(",");
+         if let Err(e) = files::pick(&accept, true, |paths| post(move |app| open_or_import(app, paths))) {
+@@ -199,6 +224,8 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
+         }
+     };
+     api::set_info("storage", json!({"backend": persist::backend(), "entries": stored, "loadMs": js_sys::Date::now() - t0}));
++    let font_errors = crate::fonts::restore();
++    if !font_errors.is_empty() { log::warn!("Stored fonts could not load: {}",font_errors.join("; ")); api::set_info("fontErrors",json!(font_errors)); }
+     audio::install_unlock();
+     browse::restore();
+     diskcache::init();
+@@ -262,7 +289,7 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
+                 app = app.with_control(rx);
+                 let backend = cc.wgpu_render_state.as_ref().map(|rs| format!("{:?}", rs.adapter.get_info().backend));
+                 api::set_info("backend", json!(backend));
+-                Ok(Box::new(WebApp { app, persist: !empty }))
++                Ok(Box::new(WebApp { app, persist: !empty, last_bridge_status: String::new() }))
+             }),
+         )
+         .await?;
+diff --git a/apps/effectcraft-web/src/fonts.rs b/apps/effectcraft-web/src/fonts.rs
+new file mode 100644
+index 00000000..7d39b717
+--- /dev/null
++++ b/apps/effectcraft-web/src/fonts.rs
+@@ -0,0 +1,80 @@
++//! Persistent user fonts, shared with the rendering workers.
++use std::cell::RefCell;
++use std::collections::{BTreeMap, hash_map::DefaultHasher};
++use std::hash::{Hash, Hasher};
++use std::sync::Arc;
++use serde_json::{Value, json};
++
++pub const MAX_FONT: usize = 32 * 1024 * 1024;
++const MAX_TOTAL: usize = 128 * 1024 * 1024;
++const MAX_FILES: usize = 128;
++const PREFIX: &str = "/_ECFont_";
++struct Registered { data: Arc<[u8]>, faces: Value, order: usize }
++thread_local! {
++    static REGISTERED: RefCell<BTreeMap<String, Registered>> = const { RefCell::new(BTreeMap::new()) };
++}
++pub fn is_font_path(path: &str) -> bool { path.starts_with(PREFIX) && is_font_name(path) }
++pub fn is_font_name(name: &str) -> bool {
++    name.rsplit('.').next().is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc"))
++}
++pub fn paths() -> Vec<String> {
++    REGISTERED.with(|r| {
++        let registered = r.borrow();
++        let mut entries: Vec<_> = registered.iter().collect();
++        entries.sort_by_key(|(_, f)| f.order);
++        entries.into_iter().map(|(p, _)| p.clone()).collect()
++    })
++}
++fn report(path: &str, font: &Registered, duplicate: bool) -> Value {
++    json!({"path":path, "faces":font.faces, "bytes":font.data.len(), "duplicate":duplicate})
++}
++pub fn list() -> Value {
++    REGISTERED.with(|r| Value::Array(r.borrow().iter().map(|(p,f)| report(p,f,false)).collect()))
++}
++pub fn register(path: &str, data: Arc<[u8]>) -> Result<Value, String> {
++    if !is_font_path(path) || data.len() > MAX_FONT { return Err("Invalid font path or font exceeds 32 MB".into()); }
++    REGISTERED.with(|r| {
++        let mut registered = r.borrow_mut();
++        if let Some((p,f)) = registered.iter().find(|(_,f)| f.data.as_ref() == data.as_ref()) {
++            return Ok(report(p,f,true));
++        }
++        if registered.contains_key(path) { return Err("Font storage name collision".into()); }
++        let total: usize = registered.values().map(|f| f.data.len()).sum();
++        if registered.len() >= MAX_FILES || total.saturating_add(data.len()) > MAX_TOTAL {
++            return Err("User font library exceeds 128 files / 128 MB".into());
++        }
++        let ids = effectcraft_text::fonts::add_font_data_checked(data.to_vec())?;
++        let faces = Value::Array(ids.into_iter().map(|id| {
++            let face = effectcraft_text::fonts::face(id);
++            json!({"family":face.info.family, "style":face.info.style, "postscript":face.info.postscript})
++        }).collect());
++        let font = Registered { data, faces, order: registered.len() };
++        let result = report(path,&font,false);
++        registered.insert(path.to_string(),font);
++        Ok(result)
++    })
++}
++pub fn import(name: &str, data: Arc<[u8]>) -> Result<Value, String> {
++    if !is_font_name(name) || data.len() > MAX_FONT { return Err("Choose a TTF, OTF, TTC or OTC font up to 32 MB".into()); }
++    let mut hasher = DefaultHasher::new(); data.hash(&mut hasher);
++    let extension = name.rsplit('.').next().unwrap_or("ttf").to_ascii_lowercase();
++    let path = format!("{PREFIX}{:016x}.{extension}",hasher.finish());
++    let result = register(&path,data.clone())?;
++    if result["duplicate"].as_bool() != Some(true) { crate::files::put(&path,data); }
++    Ok(result)
++}
++pub fn restore() -> Vec<String> {
++    let mut errors = Vec::new();
++    let mut stored = crate::files::STORE.files();
++    stored.sort_by(|a,b| a.2.total_cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
++    for (path,_,_,_) in stored {
++        if is_font_path(&path) && let Some(data) = crate::files::get(&path)
++            && let Err(error) = register(&path,data) { errors.push(format!("{path}: {error}")); }
++    }
++    errors
++}
++pub fn refresh(app: &mut effectcraft_ui_egui::EffectcraftApp) {
++    if let Err(error) = app.session.execute("edit.purge",json!({"what":"memoryAndDisk"})) { log::warn!("Font cache invalidation: {error}"); }
++    app.frames.clear();
++    app.session.revision = app.session.revision.saturating_add(1);
++}
+diff --git a/apps/effectcraft-web/src/frames.rs b/apps/effectcraft-web/src/frames.rs
+index 523fd03c..74003339 100644
+--- a/apps/effectcraft-web/src/frames.rs
++++ b/apps/effectcraft-web/src/frames.rs
+@@ -116,13 +116,16 @@ impl WebFrames {
+             let Some(k) = s.workers.iter().position(|w| w.alive && w.busy.is_none()) else { return Err((done, "no idle frame worker".to_string())) };
+             // Footage the worker hasn't got yet.
+             let w = &mut s.workers[k];
+-            for p in footage_files(&job.project) {
++            for p in footage_files(&job.project).into_iter().chain(crate::fonts::paths()) {
+                 let Some((d, version)) = crate::files::get_versioned(&p) else { continue };
+                 if w.files.get(&p) == Some(&version) {
+                     continue;
+                 }
+                 let bytes = js_sys::Uint8Array::from(&d[..]);
+-                frame_worker_post(w.index, &obj(&[("type", "file".into()), ("path", p.as_str().into()), ("bytes", bytes.into())]), &js_sys::Array::new());
++                // This is a fresh JS-owned copy, not a view of wasm memory. Transfer its
++                // buffer instead of structured-cloning the entire media file a second time.
++                let transfer = js_sys::Array::of1(&bytes.buffer());
++                frame_worker_post(w.index, &obj(&[("type", "file".into()), ("path", p.as_str().into()), ("bytes", bytes.into())]), &transfer);
+                 w.files.insert(p, version);
+             }
+             let sync = w.mirror.sync(job.revision, &job.project);
+diff --git a/apps/effectcraft-web/src/lib.rs b/apps/effectcraft-web/src/lib.rs
+index 0d59906f..e5b356ae 100644
+--- a/apps/effectcraft-web/src/lib.rs
++++ b/apps/effectcraft-web/src/lib.rs
+@@ -37,6 +37,8 @@ pub mod diskcache;
+ #[cfg(target_arch = "wasm32")]
+ pub mod files;
+ #[cfg(target_arch = "wasm32")]
++pub mod fonts;
++#[cfg(target_arch = "wasm32")]
+ pub mod frames;
+ #[cfg(target_arch = "wasm32")]
+ pub mod persist;
+diff --git a/apps/effectcraft-web/src/persist.rs b/apps/effectcraft-web/src/persist.rs
+index a2345cc3..efd4c777 100644
+--- a/apps/effectcraft-web/src/persist.rs
++++ b/apps/effectcraft-web/src/persist.rs
+@@ -236,6 +236,7 @@ pub fn register_media(pool: &effectcraft_media::MediaPool) -> usize {
+     for (path, _, _, persisted) in STORE.files() {
+         if persisted
+             && !path.to_ascii_lowercase().ends_with(".ecproj")
++            && !crate::fonts::is_font_name(&path)
+             && let Some(d) = STORE.file(&path)
+         {
+             pool.add_bytes(&path, d);
+diff --git a/apps/effectcraft-web/src/worker.rs b/apps/effectcraft-web/src/worker.rs
+index bd86fd5d..d93989f5 100644
+--- a/apps/effectcraft-web/src/worker.rs
++++ b/apps/effectcraft-web/src/worker.rs
+@@ -59,9 +59,9 @@ impl Offload for WorkerOffload {
+     fn start(&self, req: WorkerRequest, inbox: Arc<Inbox>) -> Result<(), String> {
+         let id = req.id;
+         let files = js_sys::Array::new();
+-        for p in &req.files {
+-            if let Some((d, version)) = crate::files::get_versioned(p) {
+-                files.push(&js_sys::Array::of3(&JsValue::from_str(p), &js_sys::Uint8Array::from(&d[..]), &JsValue::from_f64(version as f64)));
++        for p in req.files.iter().cloned().chain(crate::fonts::paths()) {
++            if let Some((d, version)) = crate::files::get_versioned(&p) {
++                files.push(&js_sys::Array::of3(&JsValue::from_str(&p), &js_sys::Uint8Array::from(&d[..]), &JsValue::from_f64(version as f64)));
+             }
+         }
+         let json = serde_json::to_string(&req).map_err(|e| e.to_string())?;
+@@ -180,14 +180,26 @@ pub fn pool() -> Arc<effectcraft_media::MediaPool> {
+ 
+ /// A footage file for the jobs that follow.
+ #[wasm_bindgen(js_name = workerFile)]
+-pub fn worker_file(path: String, bytes: js_sys::Uint8Array) {
++pub fn worker_file(path: String, bytes: js_sys::Uint8Array) -> Result<(),JsValue> {
++    if crate::fonts::is_font_path(&path) && bytes.length() as usize > crate::fonts::MAX_FONT { return Err(JsValue::from_str("Worker font exceeds 32 MB")); }
+     let data: Arc<[u8]> = bytes.to_vec().into();
++    if crate::fonts::is_font_path(&path) {
++        crate::fonts::register(&path,data.clone()).map_err(|e| JsValue::from_str(&e))?;
++        invalidate_font_cache();
++        crate::files::STORE.put_file(&path,data,false);
++        return Ok(());
++    }
+     crate::files::STORE.put_file(&path, data.clone(), false);
+     POOL.with(|p| {
+         if let Some(p) = p.borrow().as_ref() {
+             p.add_bytes(&path, data);
+         }
+     });
++    Ok(())
++}
++
++pub fn invalidate_font_cache() {
++    SESSION.with(|s| { if let Some(session) = s.borrow().as_ref() { session.layer_cache.clear(); } });
+ }
+ 
+ /// A job worker's GPU (called once by `web/worker.js` after `workerInit`): with `gpu` and
+diff --git a/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js b/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js
+new file mode 100644
+index 00000000..4cff78f8
+--- /dev/null
++++ b/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js
+@@ -0,0 +1,460 @@
++/* EffectCraft Bridge v0.7.3 iPad File menu two-way ZIP bridge (offline, ZIP STORE only).
++ * Does not replace EffectCraft's WASM/JS, nor any WKWebView native file handlers.
++ * Uses EffectCraft v0.6.0/v0.7.0 file APIs (addFile, saveToBrowser, readFile).
++ */
++(() => {
++  'use strict';
++  if (window.EffectCraftBridgeIpad?.menuState) return;
++  let currentMessage = '';
++  let fontsBusy = false;
++  const MAX_FILES = 300;
++  const MAX_TOTAL = 1600 * 1024 * 1024; // hard cap for initial iPad importer
++  const MAX_JSON = 50 * 1024 * 1024;
++  const decoder = new TextDecoder('utf-8', {fatal: true});
++  const hidden = document.createElement('input');
++  hidden.type = 'file';
++  hidden.accept = '.zip,application/zip,application/x-zip-compressed';
++  hidden.style.display = 'none';
++  const fontInput = document.createElement('input');
++  fontInput.type = 'file';
++  fontInput.multiple = true;
++  fontInput.accept = '.ttf,.otf,.ttc,.otc';
++  fontInput.style.display = 'none';
++  fontInput.setAttribute('aria-label','Import custom fonts');
++
++  const button = document.createElement('button');
++  button.type = 'button';
++  button.textContent = 'Import AE ZIP';
++  button.setAttribute('aria-label', 'Import EffectCraft Bridge ZIP from Files');
++  Object.assign(button.style, {
++    position: 'fixed', right: 'max(12px, env(safe-area-inset-right))',
++    bottom: 'max(12px, env(safe-area-inset-bottom))',
++    zIndex: '2147483600', padding: '9px 14px', background: '#2d313b',
++    border: '1px solid #727887', borderRadius: '8px', color: '#f2f3f6',
++    font: '13px system-ui, sans-serif', boxShadow: '0 2px 9px #0008',
++    touchAction: 'manipulation'
++  });
++  // Export keeps a separate, user-activated Save action for WKWebView downloads.
++  const exportButton = document.createElement('button');
++  exportButton.type = 'button';
++  exportButton.textContent = 'Export Project ZIP';
++  exportButton.setAttribute('aria-label','Package EffectCraft project and media into ZIP');
++  Object.assign(exportButton.style, {
++    position: 'fixed', right: 'max(12px, env(safe-area-inset-right))',
++    bottom: 'max(58px, calc(env(safe-area-inset-bottom) + 46px))',
++    zIndex: '2147483600', padding: '9px 14px', background: '#2d313b',
++    border: '1px solid #727887', borderRadius: '8px', color: '#f2f3f6',
++    font: '13px system-ui, sans-serif', boxShadow: '0 2px 9px #0008',
++    touchAction: 'manipulation'
++  });
++  const saveButton = document.createElement('button');
++  saveButton.type='button';
++  saveButton.textContent='Save ZIP to Files';
++  Object.assign(saveButton.style, {
++    position: 'fixed', right: 'max(12px, env(safe-area-inset-right))',
++    bottom: 'max(104px, calc(env(safe-area-inset-bottom) + 92px))',
++    zIndex: '2147483600', padding: '9px 14px', background: '#28664d',
++    border: '1px solid #46aa7f', borderRadius: '8px', color: '#fff',
++    font: '13px system-ui, sans-serif', boxShadow: '0 2px 9px #0008',
++    touchAction: 'manipulation', display:'none'
++  });
++  const msg = document.createElement('div');
++  Object.assign(msg.style, {
++    position: 'fixed', right: '12px', bottom: '154px', zIndex: '2147483600',
++    maxWidth: 'min(92vw, 380px)', whiteSpace: 'pre-wrap',
++    background: '#222832', color: 'white', border: '1px solid #8993a0',
++    borderRadius: '8px', font: '12px/1.45 system-ui, sans-serif',
++    padding: '10px', display: 'none', boxShadow: '0 4px 15px #0008'
++  });
++  function message(s, keep=false) {
++    currentMessage = String(s);
++    msg.textContent = s;
++    msg.style.display = 'none';
++    if (keep) console.info('[EffectCraft Bridge]', s);
++  }
++  const u16 = (v,n) => v.getUint16(n,true);
++  const u32 = (v,n) => v.getUint32(n,true);
++  function validateName(name) {
++    if (!name || name.startsWith('/') || /^[a-zA-Z]:/.test(name) || name.indexOf('\\') >= 0 ||
++        name.split('/').some(s => s === '..' || s === '.'))
++      throw Error('Unsafe ZIP entry name: ' + name);
++  }
++  async function locateZipEntries(file) {
++    if (file.size > 0xffffffff) throw Error('ZIP64 / >4GB packages are not supported yet');
++    const tailStart = Math.max(0, file.size - 65557);
++    const tail = await file.slice(tailStart).arrayBuffer();
++    const t = new DataView(tail);
++    let eocd = -1;
++    for (let i = tail.byteLength - 22; i >= 0; i--) {
++      if (u32(t,i) === 0x06054b50 && i+22+u16(t,i+20)===tail.byteLength) { eocd = i; break; }
++    }
++    if (eocd === -1) throw Error('Invalid ZIP: no end-of-central-directory record');
++    const count = u16(t,eocd+10), cdSize = u32(t,eocd+12), cdOffset = u32(t,eocd+16);
++    if (u16(t,eocd+8) !== count || count > MAX_FILES ||
++        u16(t,eocd+4) !== 0 || u16(t,eocd+6) !== 0)
++      throw Error('Unsupported ZIP format (too many entries or multiple disks)');
++    if (cdOffset + cdSize > file.size) throw Error('ZIP central directory out of bounds');
++    const cd = new DataView(await file.slice(cdOffset,cdOffset+cdSize).arrayBuffer());
++    const entries = new Map();
++    let pos = 0, total = 0;
++    for (let i=0; i<count; i++) {
++      if (pos+46 > cd.byteLength || u32(cd,pos) !== 0x02014b50)
++        throw Error('Invalid ZIP central directory');
++      const flags=u16(cd,pos+8), method=u16(cd,pos+10);
++      const checksum=u32(cd,pos+16), compressed=u32(cd,pos+20), uncompressed=u32(cd,pos+24);
++      const fn=u16(cd,pos+28), extra=u16(cd,pos+30), comment=u16(cd,pos+32);
++      const disk=u16(cd,pos+34), localOffset=u32(cd,pos+42);
++      if (pos+46+fn+extra+comment > cd.byteLength) throw Error('Truncated ZIP entry');
++      const name=decoder.decode(new Uint8Array(cd.buffer,cd.byteOffset+pos+46,fn));
++      validateName(name);
++      if (disk !== 0 || flags&1 || method !== 0 || compressed !== uncompressed ||
++          compressed===0xffffffff || localOffset===0xffffffff)
++        throw Error('ZIP entry '+name+' is encrypted, compressed, or ZIP64. Use Bridge 0.5 packaging.');
++      if (entries.has(name)) throw Error('Duplicate ZIP name: '+name);
++      const loc=new DataView(await file.slice(localOffset,localOffset+30).arrayBuffer());
++      if (loc.byteLength < 30 || u32(loc,0)!==0x04034b50) throw Error('Bad ZIP local header: '+name);
++      const dataStart=localOffset+30+u16(loc,26)+u16(loc,28);
++      if (dataStart + uncompressed > cdOffset) throw Error('ZIP entry outside data section: '+name);
++      if (!name.endsWith('/')) {
++        entries.set(name,{name,start:dataStart,size:uncompressed,checksum});
++        total += uncompressed;
++        if (total > MAX_TOTAL) throw Error('Media package too large for iPad importer (1.6 GB limit)');
++      }
++      pos += 46+fn+extra+comment;
++    }
++    return entries;
++  }
++  async function verifyZipEntries(file, entries) {
++    // Validate every entry before addFile can change the current project or FS.
++    // Stream bounded chunks and yield to WebKit between chunks for large media.
++    let index=0;
++    for (const entry of entries.values()) {
++      message('Checking ZIP: '+(++index)+'/'+entries.size+' — '+entry.name);
++      let checksum=0xffffffff;
++      for (let offset=0;offset<entry.size;offset+=1024*1024) {
++        const length=Math.min(1024*1024,entry.size-offset);
++        const bytes=new Uint8Array(await file.slice(entry.start+offset,entry.start+offset+length).arrayBuffer());
++        if (bytes.length!==length) throw Error('Truncated ZIP data: '+entry.name);
++        checksum=crc32Update(checksum,bytes);
++        await new Promise(resolve=>setTimeout(resolve,0));
++      }
++      if (((checksum^0xffffffff)>>>0)!==entry.checksum)
++        throw Error('Damaged ZIP file: '+entry.name+'. CRC-32 mismatch. Import stopped before changing the project. Copy the ZIP again from the computer.');
++    }
++  }
++  function mime(name) {
++    const ext=name.split('.').pop().toLowerCase();
++    return {png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',
++      mp4:'video/mp4',mov:'video/quicktime',mp3:'audio/mpeg',wav:'audio/wav'}[ext] || 'application/octet-stream';
++  }
++  function safeFilename(n) {
++    // Preserve the extension; v0.5.1 accepted AE bundles with truncated .mp4 names.
++    const original=String(n||'asset');
++    const found=original.match(/\.[a-z0-9]{1,8}$/i);
++    const ext=found ? found[0].toLowerCase() : '';
++    const stem=(ext ? original.slice(0,-ext.length) : original)
++      .replace(/[^a-z0-9_-]/gi,'_').replace(/_+/g,'_');
++    return (stem.slice(-90+ext.length)||'asset')+ext;
++  }
++  function getPath(result) {
++    if (typeof result==='string' && result) return result;
++    if (result && typeof result.path === 'string' && result.path) return result.path;
++    throw Error('EffectCraft did not return a virtual file path');
++  }
++  async function importZip(file) {
++    if (!window.effectcraft || !window.effectcraftLoad || !('readyMs' in window.effectcraftLoad))
++      throw Error('Wait for EffectCraft to finish loading');
++    const entries=await locateZipEntries(file);
++    const projects=[...entries.values()].filter(e=>!e.name.includes('/') && /\.ecproj$/i.test(e.name));
++    if (projects.length!==1) throw Error('ZIP must contain exactly one .ecproj at its root');
++    const projectEntry=projects[0];
++    if (projectEntry.size>MAX_JSON) throw Error('Project JSON is too large');
++    await verifyZipEntries(file,entries);
++    const projectString=decoder.decode(await file.slice(projectEntry.start,projectEntry.start+projectEntry.size).arrayBuffer());
++    let doc;
++    try { doc=JSON.parse(projectString.replace(/^\uFEFF/,'')); }
++    catch(e) { throw Error('Invalid .ecproj JSON: '+e.message); }
++    if (!doc || ![1,2].includes(doc.schema) || !doc.items || typeof doc.items!=='object')
++      throw Error('Unsupported EffectCraft .ecproj schema');
++    const media=[];
++    for (const item of Object.values(doc.items)) {
++      if (!item || !item.kind || item.kind.type!=='Footage') continue;
++      const path=String(item.kind.path||'').replace(/\\/g,'/').replace(/^\.\//,'');
++      validateName(path);
++      const entry=entries.get(path);
++      if (!entry) throw Error('Missing media in ZIP: '+path);
++      media.push({item,entry});
++    }
++    const stamp=Date.now().toString(36);
++    const expected=media.length;
++    message('Media: '+expected+' files. Importing…');
++    // Import each file into EffectCraft's persistent virtual FS. This may temporarily
++    // add items to the currently open project; the final .ecproj replaces it.
++    for (let i=0;i<media.length;i++) {
++      const {item,entry}=media[i];
++      // The original project item name usually retains .mp4/.mp3 even when the
++      // old AE Bridge ZIP entry lost its extension during name truncation.
++      const preferred=String(item.name||'');
++      const entryName=entry.name.split('/').pop();
++      const keepExt=/\.[a-z0-9]{1,8}$/i.test(preferred) ? preferred : entryName;
++      const name='ecbridge_'+stamp+'_'+item.id+'_'+safeFilename(keepExt);
++      const mediaType=mime(keepExt);
++      const blob=file.slice(entry.start,entry.start+entry.size,mediaType);
++      const result=await window.effectcraft.addFile(new File([blob],name,{type:mediaType}),name);
++      item.kind.path=getPath(result);
++      item.kind.missing=false;
++      message('Media: '+(i+1)+'/'+expected+' imported');
++    }
++    const newName='ECBridge_'+stamp+'.ecproj';
++    const payload=new File([JSON.stringify(doc)],newName,{type:'application/json'});
++    message('Opening project…');
++    await window.effectcraft.addFile(payload,newName);
++    if (window.effectcraft.flush) await window.effectcraft.flush();
++    message('Project opened. Media: '+expected+'/'+expected+'. Save the project in EffectCraft to keep the new paths.',true);
++  }
++  // Bridge 0.5.1 portable project exporter. No native changes or external ZIP library.
++  const MAX_EXPORT_BYTES = 256 * 1024 * 1024; // avoid WebKit memory exhaustion
++  let prepared = null;
++  const te = new TextEncoder();
++  const crcTable = new Uint32Array(256);
++  for (let n=0;n<256;n++) {
++    let c=n;
++    for(let k=0;k<8;k++) c=(c&1) ? (0xedb88320^(c>>>1)) : (c>>>1);
++    crcTable[n]=c>>>0;
++  }
++  function crc32Update(c,bytes) {
++    for(let i=0;i<bytes.length;i++) c=crcTable[(c^bytes[i])&255]^(c>>>8);
++    return c;
++  }
++  function crc32(bytes) {
++    return (crc32Update(0xffffffff,bytes)^0xffffffff)>>>0;
++  }
++  function bytesOf(value, filename) {
++    if(value instanceof Uint8Array) return value;
++    if(value instanceof ArrayBuffer) return new Uint8Array(value);
++    if(ArrayBuffer.isView(value)) return new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
++    if(Array.isArray(value)) return Uint8Array.from(value);
++    throw Error('File is not accessible in EffectCraft memory: '+filename+
++                '. Re-import the original media through Files, or use Import AE ZIP.');
++  }
++  function asciiBase(s) {
++    const v=String(s||'EffectCraft_Project').replace(/[^a-z0-9_-]/gi,'_').replace(/_+/g,'_').replace(/^_+|_+$/g,'').slice(0,65);
++    return v || 'EffectCraft_Project';
++  }
++  function fileBasename(path) {
++    return String(path||'file').replace(/\\/g,'/').split('/').pop();
++  }
++  function mediaFilename(name) {
++    // Use original item.name (not the encoded internal virtual file path) to
++    // ensure the output filename always has a valid media extension.
++    const n=String(name||'media');
++    const found=n.match(/\.[a-z0-9]{1,8}$/i);
++    const ext=found ? found[0].toLowerCase() : '';
++    const stem=(ext ? n.slice(0,-ext.length) : n)
++      .replace(/[^a-z0-9_-]/gi,'_').replace(/_+/g,'_').slice(0,90-ext.length);
++    return (stem||'media')+ext;
++  }
++  function zipU16(buf,at,v) {buf.setUint16(at,v,true);}
++  function zipU32(buf,at,v) {buf.setUint32(at,v>>>0,true);}
++  // ZIP32 STORE; UTF-8 names, CRC-32, central directory, one Blob; compatible with AE 0.5.
++  function createStoreZip(files) {
++    if(files.length>MAX_FILES) throw Error('Too many files for ZIP export');
++    const body=[],central=[];
++    let offset=0,centralSize=0;
++    for(const entry of files) {
++      validateName(entry.name);
++      const name=te.encode(entry.name), data=entry.data;
++      if(name.length>65535 || data.byteLength>0xffffffff) throw Error('ZIP file entry too large');
++      const checksum=crc32(data);
++      const local=new Uint8Array(30+name.length),ld=new DataView(local.buffer);
++      zipU32(ld,0,0x04034b50);zipU16(ld,4,20);zipU16(ld,6,0x0800);
++      zipU16(ld,8,0);zipU16(ld,10,0);zipU16(ld,12,0);
++      zipU32(ld,14,checksum);zipU32(ld,18,data.byteLength);zipU32(ld,22,data.byteLength);
++      zipU16(ld,26,name.length);zipU16(ld,28,0);local.set(name,30);
++      const cd=new Uint8Array(46+name.length),dv=new DataView(cd.buffer);
++      zipU32(dv,0,0x02014b50);zipU16(dv,4,20);zipU16(dv,6,20);
++      zipU16(dv,8,0x0800);zipU16(dv,10,0);zipU16(dv,12,0);zipU16(dv,14,0);
++      zipU32(dv,16,checksum);zipU32(dv,20,data.byteLength);zipU32(dv,24,data.byteLength);
++      zipU16(dv,28,name.length);zipU16(dv,30,0);zipU16(dv,32,0);
++      zipU16(dv,34,0);zipU16(dv,36,0);zipU32(dv,38,0);zipU32(dv,42,offset);
++      cd.set(name,46);
++      body.push(local,data); central.push(cd);
++      offset+=local.byteLength+data.byteLength;centralSize+=cd.byteLength;
++      if(offset>0xffffffff) throw Error('ZIP32 size limit exceeded');
++    }
++    const end=new Uint8Array(22),ed=new DataView(end.buffer);
++    zipU32(ed,0,0x06054b50);zipU16(ed,4,0);zipU16(ed,6,0);
++    zipU16(ed,8,files.length);zipU16(ed,10,files.length);
++    zipU32(ed,12,centralSize);zipU32(ed,16,offset);zipU16(ed,20,0);
++    return new Blob([...body,...central,end],{type:'application/zip'});
++  }
++  async function exportZip() {
++    if(!window.effectcraft || !window.effectcraftLoad || !('readyMs' in window.effectcraftLoad))
++      throw Error('Wait for EffectCraft to finish loading');
++    const api=window.effectcraft;
++    if(typeof api.saveToBrowser!=='function' || typeof api.readFile!=='function')
++      throw Error('EffectCraft 0.6.0 file APIs are unavailable');
++    if(api.flush) await api.flush();
++    message('Saving a snapshot of the current project…');
++    const stamp=Date.now().toString(36);
++    const snapshot='/ECBridge_snapshot_'+stamp+'.ecproj';
++    const snapshotResult=await api.saveToBrowser(snapshot);
++    const savedPath=getPath(snapshotResult);
++    const projectData=bytesOf(await api.readFile(savedPath),savedPath);
++    if(projectData.length>MAX_JSON) throw Error('Project JSON too large for ZIP exporter');
++    let doc;
++    try {doc=JSON.parse(decoder.decode(projectData).replace(/^\uFEFF/,''));}
++    catch(e) {throw Error('Could not parse current .ecproj: '+e.message);}
++    if(!doc || ![1,2].includes(doc.schema) || !doc.items || typeof doc.items!=='object')
++      throw Error('Only EffectCraft schema 1 and 2 projects are supported');
++    let comp=null;
++    for(const item of Object.values(doc.items)) {
++      if(item && item.kind && item.kind.type==='Comp') {comp=item;break;}
++    }
++    const baseName=asciiBase(comp && comp.name || 'EffectCraft_Project');
++    const assetDir=baseName+'_assets';
++    const entries=[];
++    let total=projectData.length;
++    const seenNames=new Set();
++    const media=Object.entries(doc.items).filter(([,item])=>item&&item.kind&&item.kind.type==='Footage');
++    for(let i=0;i<media.length;i++) {
++      const [id,item]=media[i];
++      const source=String(item.kind.path||'');
++      if(!source) throw Error('Missing path for footage '+(item.name||id));
++      const raw=await api.readFile(source);
++      if(raw==null) throw Error('Missing media: '+(item.name||source)+' ('+source+'). Re-import it before export.');
++      const contents=bytesOf(raw,source);
++      total+=contents.byteLength;
++      if(total>MAX_EXPORT_BYTES) throw Error('Package exceeds 256 MB. Export smaller media for now.');
++      const original=String(item.name||'');
++      const name='media_'+id.replace(/[^a-z0-9_-]/gi,'_')+'_'+
++        mediaFilename(/\.[a-z0-9]{1,8}$/i.test(original) ? original : fileBasename(source));
++      const target=assetDir+'/'+name;
++      if(seenNames.has(target)) throw Error('Conflicting asset name: '+target);
++      seenNames.add(target);
++      entries.push({name:target,data:contents});
++      item.kind.path=target;
++      item.kind.missing=false;
++      message('Reading media '+(i+1)+'/'+media.length+': '+item.name);
++      await Promise.resolve();
++    }
++    // Original current project stays untouched; only the copy inside ZIP receives portable paths.
++    const json=te.encode(JSON.stringify(doc));
++    if(json.length>MAX_JSON) throw Error('Exported project JSON too large');
++    if(json.length+total-projectData.length>MAX_EXPORT_BYTES) throw Error('Package exceeds 256 MB');
++    entries.unshift({name:baseName+'.ecproj',data:json});
++    const zip=createStoreZip(entries);
++    return {blob:zip,name:baseName+'-Bridge.zip',count:media.length};
++  }
++  exportButton.onclick=async () => {
++    if(exportButton.disabled || button.disabled) return;
++    prepared=null;
++    saveButton.style.display='none';
++    exportButton.disabled=true;
++    exportButton.textContent='Packaging…';
++    try {
++      prepared=await exportZip();
++      saveButton.style.display='block';
++      message('ZIP ready: '+prepared.count+' media file(s), '+Math.round(prepared.blob.size/1024/1024*10)/10+
++        ' MB. Tap “Save ZIP to Files” to choose a destination.',true);
++    } catch(e) {
++      console.error('[EffectCraft Bridge export]',e);
++      message('Export failed: '+(e&&e.message||String(e)),true);
++    } finally {
++      exportButton.disabled=false;
++      exportButton.textContent='Export Project ZIP';
++    }
++  };
++  // A separate real tap is intentional: WKWebView can require user activation for downloads.
++  saveButton.onclick=() => {
++    if(!prepared) return;
++    const url=URL.createObjectURL(prepared.blob);
++    const link=document.createElement('a');
++    link.href=url;
++    link.download=prepared.name;
++    document.body.appendChild(link);
++    link.click();
++    link.remove();
++    setTimeout(()=>URL.revokeObjectURL(url),120000);
++    message('Requested ZIP download. Use the iPadOS Files picker to save it. If no picker appears, retry “Save ZIP to Files”.',true);
++  };
++  button.onclick=() => {
++    if (button.disabled || exportButton.disabled) return;
++    hidden.value='';hidden.click();
++  };
++  hidden.onchange=async () => {
++    if (!hidden.files || !hidden.files[0]) return;
++    button.disabled=true;button.textContent='Importing…';
++    try {
++      const name=hidden.files[0].name;
++      if (!/\.zip$/i.test(name)) throw Error('Choose .zip from EffectCraft Bridge 0.5');
++      await importZip(hidden.files[0]);
++    } catch(e) {
++      console.error('[EffectCraft Bridge]',e);
++      message('Import failed: '+(e && e.message || String(e)),true);
++    } finally {button.disabled=false;button.textContent='Import AE ZIP';}
++  };
++  fontInput.onchange=async () => {
++    const picked=Array.from(fontInput.files || []);
++    if (!picked.length) return;
++    fontsBusy=true;
++    const added=[],already=[],errors=[];
++    try {
++      if (picked.length>32) throw Error('Choose up to 32 font files at once');
++      for (let i=0;i<picked.length;i++) {
++        const file=picked[i];
++        message('Importing fonts: '+(i+1)+'/'+picked.length+' — '+file.name);
++        try {
++          if (!/\.(ttf|otf|ttc|otc)$/i.test(file.name)) throw Error('Choose a TTF or OTF font');
++          if (file.size>32*1024*1024) throw Error('Font exceeds 32 MB');
++          const result=await window.effectcraft.importFont(file);
++          const names=(result.faces || []).slice(0,4).map(f=>(f.family+' '+f.style).slice(0,160)).join(', ');
++          (result.duplicate ? already : added).push(names || file.name);
++        } catch (error) { errors.push(file.name+': '+(error?.message || String(error))); }
++      }
++      await window.effectcraft.flush();
++      const lines=[];
++      if (added.length) lines.push('Fonts added ('+added.length+'): '+added.slice(0,4).join('; ')+(added.length>4?'…':'')+'. Select them in the Character panel.');
++      if (already.length) lines.push('Already installed: '+already.length+' file(s)');
++      if (errors.length) lines.push('Could not import: '+errors.slice(0,3).join('; '));
++      message(lines.join('\n'),true);
++      if (errors.length && typeof window.alert==='function') window.alert(errors.join('\n'));
++    } catch (error) {
++      message('Font import/save failed: '+(error?.message || String(error)),true);
++      if (typeof window.alert==='function') window.alert(currentMessage);
++    } finally { fontsBusy=false; fontInput.value=''; }
++  };
++  const uiNodes=[hidden,fontInput];
++  const remount=()=>{
++    for(const item of uiNodes) {
++      if(item.parentNode!==document.body) document.body.appendChild(item);
++      item.style.setProperty('z-index', '2147483647', 'important');
++    }
++  };
++  const addUI=()=>{
++    remount();
++    // Keep controls available if the canvas app rebuilds its body children.
++    new MutationObserver(remount).observe(document.body, {childList:true});
++  };
++  if (document.body) addUI();
++  else document.addEventListener('DOMContentLoaded', addUI, {once:true});
++  // Useful for scripted static tests; no external server access.
++  window.EffectCraftBridgeIpad={
++    importZip,exportZip,createStoreZip,
++    menuState: () => {
++      const ready = !!window.effectcraft && !!window.effectcraftLoad && 'readyMs' in window.effectcraftLoad;
++      const idle = !button.disabled && !exportButton.disabled && !fontsBusy;
++      return {importEnabled:ready&&idle,exportEnabled:ready&&idle,
++        fontsEnabled:ready&&idle&&typeof window.effectcraft.importFont==='function',
++        saveEnabled:ready&&idle&&!!prepared,status:currentMessage};
++    },
++    runCommand: (id) => {
++      const state = window.EffectCraftBridgeIpad.menuState();
++      if (id === 'bridge.importAEZip' && state.importEnabled) { button.onclick(); return; }
++      if (id === 'bridge.exportProjectZip' && state.exportEnabled) { void exportButton.onclick(); return; }
++      if (id === 'bridge.saveZipToFiles' && state.saveEnabled) { saveButton.onclick(); return; }
++      if (id === 'bridge.importFonts' && state.fontsEnabled) { fontInput.value='';fontInput.click();return; }
++      throw Error('ZIP bridge action is unavailable: '+id);
++    }
++  };
++})();
+diff --git a/apps/effectcraft-web/web/index.html b/apps/effectcraft-web/web/index.html
+index 70ab93ff..19edc8a4 100644
+--- a/apps/effectcraft-web/web/index.html
++++ b/apps/effectcraft-web/web/index.html
+@@ -38,11 +38,476 @@
+     #device-lost button:last-child:hover { background: #4aa0f5; }
+     #device-lost button:disabled { opacity: 0.6; cursor: default; }
+   </style>
++
+ </head>
+ <body>
+   <canvas id="effectcraft_canvas"></canvas>
+   <div id="loading"><img src="favicon.svg" alt=""><div id="status">Loading EffectCraft…</div></div>
+-  <script type="module">
++
++<script id="ecbridge-file-menu">
++/* EffectCraft Bridge v0.7.3 iPad File menu two-way ZIP bridge (offline, ZIP STORE only).
++ * Does not replace EffectCraft's WASM/JS, nor any WKWebView native file handlers.
++ * Uses EffectCraft v0.6.0/v0.7.0 file APIs (addFile, saveToBrowser, readFile).
++ */
++(() => {
++  'use strict';
++  if (window.EffectCraftBridgeIpad?.menuState) return;
++  let currentMessage = '';
++  let fontsBusy = false;
++  const MAX_FILES = 300;
++  const MAX_TOTAL = 1600 * 1024 * 1024; // hard cap for initial iPad importer
++  const MAX_JSON = 50 * 1024 * 1024;
++  const decoder = new TextDecoder('utf-8', {fatal: true});
++  const hidden = document.createElement('input');
++  hidden.type = 'file';
++  hidden.accept = '.zip,application/zip,application/x-zip-compressed';
++  hidden.style.display = 'none';
++  const fontInput = document.createElement('input');
++  fontInput.type = 'file';
++  fontInput.multiple = true;
++  fontInput.accept = '.ttf,.otf,.ttc,.otc';
++  fontInput.style.display = 'none';
++  fontInput.setAttribute('aria-label','Import custom fonts');
++
++  const button = document.createElement('button');
++  button.type = 'button';
++  button.textContent = 'Import AE ZIP';
++  button.setAttribute('aria-label', 'Import EffectCraft Bridge ZIP from Files');
++  Object.assign(button.style, {
++    position: 'fixed', right: 'max(12px, env(safe-area-inset-right))',
++    bottom: 'max(12px, env(safe-area-inset-bottom))',
++    zIndex: '2147483600', padding: '9px 14px', background: '#2d313b',
++    border: '1px solid #727887', borderRadius: '8px', color: '#f2f3f6',
++    font: '13px system-ui, sans-serif', boxShadow: '0 2px 9px #0008',
++    touchAction: 'manipulation'
++  });
++  // Export keeps a separate, user-activated Save action for WKWebView downloads.
++  const exportButton = document.createElement('button');
++  exportButton.type = 'button';
++  exportButton.textContent = 'Export Project ZIP';
++  exportButton.setAttribute('aria-label','Package EffectCraft project and media into ZIP');
++  Object.assign(exportButton.style, {
++    position: 'fixed', right: 'max(12px, env(safe-area-inset-right))',
++    bottom: 'max(58px, calc(env(safe-area-inset-bottom) + 46px))',
++    zIndex: '2147483600', padding: '9px 14px', background: '#2d313b',
++    border: '1px solid #727887', borderRadius: '8px', color: '#f2f3f6',
++    font: '13px system-ui, sans-serif', boxShadow: '0 2px 9px #0008',
++    touchAction: 'manipulation'
++  });
++  const saveButton = document.createElement('button');
++  saveButton.type='button';
++  saveButton.textContent='Save ZIP to Files';
++  Object.assign(saveButton.style, {
++    position: 'fixed', right: 'max(12px, env(safe-area-inset-right))',
++    bottom: 'max(104px, calc(env(safe-area-inset-bottom) + 92px))',
++    zIndex: '2147483600', padding: '9px 14px', background: '#28664d',
++    border: '1px solid #46aa7f', borderRadius: '8px', color: '#fff',
++    font: '13px system-ui, sans-serif', boxShadow: '0 2px 9px #0008',
++    touchAction: 'manipulation', display:'none'
++  });
++  const msg = document.createElement('div');
++  Object.assign(msg.style, {
++    position: 'fixed', right: '12px', bottom: '154px', zIndex: '2147483600',
++    maxWidth: 'min(92vw, 380px)', whiteSpace: 'pre-wrap',
++    background: '#222832', color: 'white', border: '1px solid #8993a0',
++    borderRadius: '8px', font: '12px/1.45 system-ui, sans-serif',
++    padding: '10px', display: 'none', boxShadow: '0 4px 15px #0008'
++  });
++  function message(s, keep=false) {
++    currentMessage = String(s);
++    msg.textContent = s;
++    msg.style.display = 'none';
++    if (keep) console.info('[EffectCraft Bridge]', s);
++  }
++  const u16 = (v,n) => v.getUint16(n,true);
++  const u32 = (v,n) => v.getUint32(n,true);
++  function validateName(name) {
++    if (!name || name.startsWith('/') || /^[a-zA-Z]:/.test(name) || name.indexOf('\\') >= 0 ||
++        name.split('/').some(s => s === '..' || s === '.'))
++      throw Error('Unsafe ZIP entry name: ' + name);
++  }
++  async function locateZipEntries(file) {
++    if (file.size > 0xffffffff) throw Error('ZIP64 / >4GB packages are not supported yet');
++    const tailStart = Math.max(0, file.size - 65557);
++    const tail = await file.slice(tailStart).arrayBuffer();
++    const t = new DataView(tail);
++    let eocd = -1;
++    for (let i = tail.byteLength - 22; i >= 0; i--) {
++      if (u32(t,i) === 0x06054b50 && i+22+u16(t,i+20)===tail.byteLength) { eocd = i; break; }
++    }
++    if (eocd === -1) throw Error('Invalid ZIP: no end-of-central-directory record');
++    const count = u16(t,eocd+10), cdSize = u32(t,eocd+12), cdOffset = u32(t,eocd+16);
++    if (u16(t,eocd+8) !== count || count > MAX_FILES ||
++        u16(t,eocd+4) !== 0 || u16(t,eocd+6) !== 0)
++      throw Error('Unsupported ZIP format (too many entries or multiple disks)');
++    if (cdOffset + cdSize > file.size) throw Error('ZIP central directory out of bounds');
++    const cd = new DataView(await file.slice(cdOffset,cdOffset+cdSize).arrayBuffer());
++    const entries = new Map();
++    let pos = 0, total = 0;
++    for (let i=0; i<count; i++) {
++      if (pos+46 > cd.byteLength || u32(cd,pos) !== 0x02014b50)
++        throw Error('Invalid ZIP central directory');
++      const flags=u16(cd,pos+8), method=u16(cd,pos+10);
++      const checksum=u32(cd,pos+16), compressed=u32(cd,pos+20), uncompressed=u32(cd,pos+24);
++      const fn=u16(cd,pos+28), extra=u16(cd,pos+30), comment=u16(cd,pos+32);
++      const disk=u16(cd,pos+34), localOffset=u32(cd,pos+42);
++      if (pos+46+fn+extra+comment > cd.byteLength) throw Error('Truncated ZIP entry');
++      const name=decoder.decode(new Uint8Array(cd.buffer,cd.byteOffset+pos+46,fn));
++      validateName(name);
++      if (disk !== 0 || flags&1 || method !== 0 || compressed !== uncompressed ||
++          compressed===0xffffffff || localOffset===0xffffffff)
++        throw Error('ZIP entry '+name+' is encrypted, compressed, or ZIP64. Use Bridge 0.5 packaging.');
++      if (entries.has(name)) throw Error('Duplicate ZIP name: '+name);
++      const loc=new DataView(await file.slice(localOffset,localOffset+30).arrayBuffer());
++      if (loc.byteLength < 30 || u32(loc,0)!==0x04034b50) throw Error('Bad ZIP local header: '+name);
++      const dataStart=localOffset+30+u16(loc,26)+u16(loc,28);
++      if (dataStart + uncompressed > cdOffset) throw Error('ZIP entry outside data section: '+name);
++      if (!name.endsWith('/')) {
++        entries.set(name,{name,start:dataStart,size:uncompressed,checksum});
++        total += uncompressed;
++        if (total > MAX_TOTAL) throw Error('Media package too large for iPad importer (1.6 GB limit)');
++      }
++      pos += 46+fn+extra+comment;
++    }
++    return entries;
++  }
++  async function verifyZipEntries(file, entries) {
++    // Validate every entry before addFile can change the current project or FS.
++    // Stream bounded chunks and yield to WebKit between chunks for large media.
++    let index=0;
++    for (const entry of entries.values()) {
++      message('Checking ZIP: '+(++index)+'/'+entries.size+' — '+entry.name);
++      let checksum=0xffffffff;
++      for (let offset=0;offset<entry.size;offset+=1024*1024) {
++        const length=Math.min(1024*1024,entry.size-offset);
++        const bytes=new Uint8Array(await file.slice(entry.start+offset,entry.start+offset+length).arrayBuffer());
++        if (bytes.length!==length) throw Error('Truncated ZIP data: '+entry.name);
++        checksum=crc32Update(checksum,bytes);
++        await new Promise(resolve=>setTimeout(resolve,0));
++      }
++      if (((checksum^0xffffffff)>>>0)!==entry.checksum)
++        throw Error('Damaged ZIP file: '+entry.name+'. CRC-32 mismatch. Import stopped before changing the project. Copy the ZIP again from the computer.');
++    }
++  }
++  function mime(name) {
++    const ext=name.split('.').pop().toLowerCase();
++    return {png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',
++      mp4:'video/mp4',mov:'video/quicktime',mp3:'audio/mpeg',wav:'audio/wav'}[ext] || 'application/octet-stream';
++  }
++  function safeFilename(n) {
++    // Preserve the extension; v0.5.1 accepted AE bundles with truncated .mp4 names.
++    const original=String(n||'asset');
++    const found=original.match(/\.[a-z0-9]{1,8}$/i);
++    const ext=found ? found[0].toLowerCase() : '';
++    const stem=(ext ? original.slice(0,-ext.length) : original)
++      .replace(/[^a-z0-9_-]/gi,'_').replace(/_+/g,'_');
++    return (stem.slice(-90+ext.length)||'asset')+ext;
++  }
++  function getPath(result) {
++    if (typeof result==='string' && result) return result;
++    if (result && typeof result.path === 'string' && result.path) return result.path;
++    throw Error('EffectCraft did not return a virtual file path');
++  }
++  async function importZip(file) {
++    if (!window.effectcraft || !window.effectcraftLoad || !('readyMs' in window.effectcraftLoad))
++      throw Error('Wait for EffectCraft to finish loading');
++    const entries=await locateZipEntries(file);
++    const projects=[...entries.values()].filter(e=>!e.name.includes('/') && /\.ecproj$/i.test(e.name));
++    if (projects.length!==1) throw Error('ZIP must contain exactly one .ecproj at its root');
++    const projectEntry=projects[0];
++    if (projectEntry.size>MAX_JSON) throw Error('Project JSON is too large');
++    await verifyZipEntries(file,entries);
++    const projectString=decoder.decode(await file.slice(projectEntry.start,projectEntry.start+projectEntry.size).arrayBuffer());
++    let doc;
++    try { doc=JSON.parse(projectString.replace(/^\uFEFF/,'')); }
++    catch(e) { throw Error('Invalid .ecproj JSON: '+e.message); }
++    if (!doc || ![1,2].includes(doc.schema) || !doc.items || typeof doc.items!=='object')
++      throw Error('Unsupported EffectCraft .ecproj schema');
++    const media=[];
++    for (const item of Object.values(doc.items)) {
++      if (!item || !item.kind || item.kind.type!=='Footage') continue;
++      const path=String(item.kind.path||'').replace(/\\/g,'/').replace(/^\.\//,'');
++      validateName(path);
++      const entry=entries.get(path);
++      if (!entry) throw Error('Missing media in ZIP: '+path);
++      media.push({item,entry});
++    }
++    const stamp=Date.now().toString(36);
++    const expected=media.length;
++    message('Media: '+expected+' files. Importing…');
++    // Import each file into EffectCraft's persistent virtual FS. This may temporarily
++    // add items to the currently open project; the final .ecproj replaces it.
++    for (let i=0;i<media.length;i++) {
++      const {item,entry}=media[i];
++      // The original project item name usually retains .mp4/.mp3 even when the
++      // old AE Bridge ZIP entry lost its extension during name truncation.
++      const preferred=String(item.name||'');
++      const entryName=entry.name.split('/').pop();
++      const keepExt=/\.[a-z0-9]{1,8}$/i.test(preferred) ? preferred : entryName;
++      const name='ecbridge_'+stamp+'_'+item.id+'_'+safeFilename(keepExt);
++      const mediaType=mime(keepExt);
++      const blob=file.slice(entry.start,entry.start+entry.size,mediaType);
++      const result=await window.effectcraft.addFile(new File([blob],name,{type:mediaType}),name);
++      item.kind.path=getPath(result);
++      item.kind.missing=false;
++      message('Media: '+(i+1)+'/'+expected+' imported');
++    }
++    const newName='ECBridge_'+stamp+'.ecproj';
++    const payload=new File([JSON.stringify(doc)],newName,{type:'application/json'});
++    message('Opening project…');
++    await window.effectcraft.addFile(payload,newName);
++    if (window.effectcraft.flush) await window.effectcraft.flush();
++    message('Project opened. Media: '+expected+'/'+expected+'. Save the project in EffectCraft to keep the new paths.',true);
++  }
++  // Bridge 0.5.1 portable project exporter. No native changes or external ZIP library.
++  const MAX_EXPORT_BYTES = 256 * 1024 * 1024; // avoid WebKit memory exhaustion
++  let prepared = null;
++  const te = new TextEncoder();
++  const crcTable = new Uint32Array(256);
++  for (let n=0;n<256;n++) {
++    let c=n;
++    for(let k=0;k<8;k++) c=(c&1) ? (0xedb88320^(c>>>1)) : (c>>>1);
++    crcTable[n]=c>>>0;
++  }
++  function crc32Update(c,bytes) {
++    for(let i=0;i<bytes.length;i++) c=crcTable[(c^bytes[i])&255]^(c>>>8);
++    return c;
++  }
++  function crc32(bytes) {
++    return (crc32Update(0xffffffff,bytes)^0xffffffff)>>>0;
++  }
++  function bytesOf(value, filename) {
++    if(value instanceof Uint8Array) return value;
++    if(value instanceof ArrayBuffer) return new Uint8Array(value);
++    if(ArrayBuffer.isView(value)) return new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
++    if(Array.isArray(value)) return Uint8Array.from(value);
++    throw Error('File is not accessible in EffectCraft memory: '+filename+
++                '. Re-import the original media through Files, or use Import AE ZIP.');
++  }
++  function asciiBase(s) {
++    const v=String(s||'EffectCraft_Project').replace(/[^a-z0-9_-]/gi,'_').replace(/_+/g,'_').replace(/^_+|_+$/g,'').slice(0,65);
++    return v || 'EffectCraft_Project';
++  }
++  function fileBasename(path) {
++    return String(path||'file').replace(/\\/g,'/').split('/').pop();
++  }
++  function mediaFilename(name) {
++    // Use original item.name (not the encoded internal virtual file path) to
++    // ensure the output filename always has a valid media extension.
++    const n=String(name||'media');
++    const found=n.match(/\.[a-z0-9]{1,8}$/i);
++    const ext=found ? found[0].toLowerCase() : '';
++    const stem=(ext ? n.slice(0,-ext.length) : n)
++      .replace(/[^a-z0-9_-]/gi,'_').replace(/_+/g,'_').slice(0,90-ext.length);
++    return (stem||'media')+ext;
++  }
++  function zipU16(buf,at,v) {buf.setUint16(at,v,true);}
++  function zipU32(buf,at,v) {buf.setUint32(at,v>>>0,true);}
++  // ZIP32 STORE; UTF-8 names, CRC-32, central directory, one Blob; compatible with AE 0.5.
++  function createStoreZip(files) {
++    if(files.length>MAX_FILES) throw Error('Too many files for ZIP export');
++    const body=[],central=[];
++    let offset=0,centralSize=0;
++    for(const entry of files) {
++      validateName(entry.name);
++      const name=te.encode(entry.name), data=entry.data;
++      if(name.length>65535 || data.byteLength>0xffffffff) throw Error('ZIP file entry too large');
++      const checksum=crc32(data);
++      const local=new Uint8Array(30+name.length),ld=new DataView(local.buffer);
++      zipU32(ld,0,0x04034b50);zipU16(ld,4,20);zipU16(ld,6,0x0800);
++      zipU16(ld,8,0);zipU16(ld,10,0);zipU16(ld,12,0);
++      zipU32(ld,14,checksum);zipU32(ld,18,data.byteLength);zipU32(ld,22,data.byteLength);
++      zipU16(ld,26,name.length);zipU16(ld,28,0);local.set(name,30);
++      const cd=new Uint8Array(46+name.length),dv=new DataView(cd.buffer);
++      zipU32(dv,0,0x02014b50);zipU16(dv,4,20);zipU16(dv,6,20);
++      zipU16(dv,8,0x0800);zipU16(dv,10,0);zipU16(dv,12,0);zipU16(dv,14,0);
++      zipU32(dv,16,checksum);zipU32(dv,20,data.byteLength);zipU32(dv,24,data.byteLength);
++      zipU16(dv,28,name.length);zipU16(dv,30,0);zipU16(dv,32,0);
++      zipU16(dv,34,0);zipU16(dv,36,0);zipU32(dv,38,0);zipU32(dv,42,offset);
++      cd.set(name,46);
++      body.push(local,data); central.push(cd);
++      offset+=local.byteLength+data.byteLength;centralSize+=cd.byteLength;
++      if(offset>0xffffffff) throw Error('ZIP32 size limit exceeded');
++    }
++    const end=new Uint8Array(22),ed=new DataView(end.buffer);
++    zipU32(ed,0,0x06054b50);zipU16(ed,4,0);zipU16(ed,6,0);
++    zipU16(ed,8,files.length);zipU16(ed,10,files.length);
++    zipU32(ed,12,centralSize);zipU32(ed,16,offset);zipU16(ed,20,0);
++    return new Blob([...body,...central,end],{type:'application/zip'});
++  }
++  async function exportZip() {
++    if(!window.effectcraft || !window.effectcraftLoad || !('readyMs' in window.effectcraftLoad))
++      throw Error('Wait for EffectCraft to finish loading');
++    const api=window.effectcraft;
++    if(typeof api.saveToBrowser!=='function' || typeof api.readFile!=='function')
++      throw Error('EffectCraft 0.6.0 file APIs are unavailable');
++    if(api.flush) await api.flush();
++    message('Saving a snapshot of the current project…');
++    const stamp=Date.now().toString(36);
++    const snapshot='/ECBridge_snapshot_'+stamp+'.ecproj';
++    const snapshotResult=await api.saveToBrowser(snapshot);
++    const savedPath=getPath(snapshotResult);
++    const projectData=bytesOf(await api.readFile(savedPath),savedPath);
++    if(projectData.length>MAX_JSON) throw Error('Project JSON too large for ZIP exporter');
++    let doc;
++    try {doc=JSON.parse(decoder.decode(projectData).replace(/^\uFEFF/,''));}
++    catch(e) {throw Error('Could not parse current .ecproj: '+e.message);}
++    if(!doc || ![1,2].includes(doc.schema) || !doc.items || typeof doc.items!=='object')
++      throw Error('Only EffectCraft schema 1 and 2 projects are supported');
++    let comp=null;
++    for(const item of Object.values(doc.items)) {
++      if(item && item.kind && item.kind.type==='Comp') {comp=item;break;}
++    }
++    const baseName=asciiBase(comp && comp.name || 'EffectCraft_Project');
++    const assetDir=baseName+'_assets';
++    const entries=[];
++    let total=projectData.length;
++    const seenNames=new Set();
++    const media=Object.entries(doc.items).filter(([,item])=>item&&item.kind&&item.kind.type==='Footage');
++    for(let i=0;i<media.length;i++) {
++      const [id,item]=media[i];
++      const source=String(item.kind.path||'');
++      if(!source) throw Error('Missing path for footage '+(item.name||id));
++      const raw=await api.readFile(source);
++      if(raw==null) throw Error('Missing media: '+(item.name||source)+' ('+source+'). Re-import it before export.');
++      const contents=bytesOf(raw,source);
++      total+=contents.byteLength;
++      if(total>MAX_EXPORT_BYTES) throw Error('Package exceeds 256 MB. Export smaller media for now.');
++      const original=String(item.name||'');
++      const name='media_'+id.replace(/[^a-z0-9_-]/gi,'_')+'_'+
++        mediaFilename(/\.[a-z0-9]{1,8}$/i.test(original) ? original : fileBasename(source));
++      const target=assetDir+'/'+name;
++      if(seenNames.has(target)) throw Error('Conflicting asset name: '+target);
++      seenNames.add(target);
++      entries.push({name:target,data:contents});
++      item.kind.path=target;
++      item.kind.missing=false;
++      message('Reading media '+(i+1)+'/'+media.length+': '+item.name);
++      await Promise.resolve();
++    }
++    // Original current project stays untouched; only the copy inside ZIP receives portable paths.
++    const json=te.encode(JSON.stringify(doc));
++    if(json.length>MAX_JSON) throw Error('Exported project JSON too large');
++    if(json.length+total-projectData.length>MAX_EXPORT_BYTES) throw Error('Package exceeds 256 MB');
++    entries.unshift({name:baseName+'.ecproj',data:json});
++    const zip=createStoreZip(entries);
++    return {blob:zip,name:baseName+'-Bridge.zip',count:media.length};
++  }
++  exportButton.onclick=async () => {
++    if(exportButton.disabled || button.disabled) return;
++    prepared=null;
++    saveButton.style.display='none';
++    exportButton.disabled=true;
++    exportButton.textContent='Packaging…';
++    try {
++      prepared=await exportZip();
++      saveButton.style.display='block';
++      message('ZIP ready: '+prepared.count+' media file(s), '+Math.round(prepared.blob.size/1024/1024*10)/10+
++        ' MB. Tap “Save ZIP to Files” to choose a destination.',true);
++    } catch(e) {
++      console.error('[EffectCraft Bridge export]',e);
++      message('Export failed: '+(e&&e.message||String(e)),true);
++    } finally {
++      exportButton.disabled=false;
++      exportButton.textContent='Export Project ZIP';
++    }
++  };
++  // A separate real tap is intentional: WKWebView can require user activation for downloads.
++  saveButton.onclick=() => {
++    if(!prepared) return;
++    const url=URL.createObjectURL(prepared.blob);
++    const link=document.createElement('a');
++    link.href=url;
++    link.download=prepared.name;
++    document.body.appendChild(link);
++    link.click();
++    link.remove();
++    setTimeout(()=>URL.revokeObjectURL(url),120000);
++    message('Requested ZIP download. Use the iPadOS Files picker to save it. If no picker appears, retry “Save ZIP to Files”.',true);
++  };
++  button.onclick=() => {
++    if (button.disabled || exportButton.disabled) return;
++    hidden.value='';hidden.click();
++  };
++  hidden.onchange=async () => {
++    if (!hidden.files || !hidden.files[0]) return;
++    button.disabled=true;button.textContent='Importing…';
++    try {
++      const name=hidden.files[0].name;
++      if (!/\.zip$/i.test(name)) throw Error('Choose .zip from EffectCraft Bridge 0.5');
++      await importZip(hidden.files[0]);
++    } catch(e) {
++      console.error('[EffectCraft Bridge]',e);
++      message('Import failed: '+(e && e.message || String(e)),true);
++    } finally {button.disabled=false;button.textContent='Import AE ZIP';}
++  };
++  fontInput.onchange=async () => {
++    const picked=Array.from(fontInput.files || []);
++    if (!picked.length) return;
++    fontsBusy=true;
++    const added=[],already=[],errors=[];
++    try {
++      if (picked.length>32) throw Error('Choose up to 32 font files at once');
++      for (let i=0;i<picked.length;i++) {
++        const file=picked[i];
++        message('Importing fonts: '+(i+1)+'/'+picked.length+' — '+file.name);
++        try {
++          if (!/\.(ttf|otf|ttc|otc)$/i.test(file.name)) throw Error('Choose a TTF or OTF font');
++          if (file.size>32*1024*1024) throw Error('Font exceeds 32 MB');
++          const result=await window.effectcraft.importFont(file);
++          const names=(result.faces || []).slice(0,4).map(f=>(f.family+' '+f.style).slice(0,160)).join(', ');
++          (result.duplicate ? already : added).push(names || file.name);
++        } catch (error) { errors.push(file.name+': '+(error?.message || String(error))); }
++      }
++      await window.effectcraft.flush();
++      const lines=[];
++      if (added.length) lines.push('Fonts added ('+added.length+'): '+added.slice(0,4).join('; ')+(added.length>4?'…':'')+'. Select them in the Character panel.');
++      if (already.length) lines.push('Already installed: '+already.length+' file(s)');
++      if (errors.length) lines.push('Could not import: '+errors.slice(0,3).join('; '));
++      message(lines.join('\n'),true);
++      if (errors.length && typeof window.alert==='function') window.alert(errors.join('\n'));
++    } catch (error) {
++      message('Font import/save failed: '+(error?.message || String(error)),true);
++      if (typeof window.alert==='function') window.alert(currentMessage);
++    } finally { fontsBusy=false; fontInput.value=''; }
++  };
++  const uiNodes=[hidden,fontInput];
++  const remount=()=>{
++    for(const item of uiNodes) {
++      if(item.parentNode!==document.body) document.body.appendChild(item);
++      item.style.setProperty('z-index', '2147483647', 'important');
++    }
++  };
++  const addUI=()=>{
++    remount();
++    // Keep controls available if the canvas app rebuilds its body children.
++    new MutationObserver(remount).observe(document.body, {childList:true});
++  };
++  if (document.body) addUI();
++  else document.addEventListener('DOMContentLoaded', addUI, {once:true});
++  // Useful for scripted static tests; no external server access.
++  window.EffectCraftBridgeIpad={
++    importZip,exportZip,createStoreZip,
++    menuState: () => {
++      const ready = !!window.effectcraft && !!window.effectcraftLoad && 'readyMs' in window.effectcraftLoad;
++      const idle = !button.disabled && !exportButton.disabled && !fontsBusy;
++      return {importEnabled:ready&&idle,exportEnabled:ready&&idle,
++        fontsEnabled:ready&&idle&&typeof window.effectcraft.importFont==='function',
++        saveEnabled:ready&&idle&&!!prepared,status:currentMessage};
++    },
++    runCommand: (id) => {
++      const state = window.EffectCraftBridgeIpad.menuState();
++      if (id === 'bridge.importAEZip' && state.importEnabled) { button.onclick(); return; }
++      if (id === 'bridge.exportProjectZip' && state.exportEnabled) { void exportButton.onclick(); return; }
++      if (id === 'bridge.saveZipToFiles' && state.saveEnabled) { saveButton.onclick(); return; }
++      if (id === 'bridge.importFonts' && state.fontsEnabled) { fontInput.value='';fontInput.click();return; }
++      throw Error('ZIP bridge action is unavailable: '+id);
++    }
++  };
++})();
++
++</script>
++<script type="module">
+     import init, * as ec from "./effectcraft_web.js";
+     const t0 = performance.now();
+     window.effectcraftLoad = {};
+@@ -56,6 +521,11 @@
+       renderFrame: (params) => ec.request("render.frame", { base64: true, ...(params ?? {}) }),
+       files: () => ec.files(),
+       readFile: (path) => ec.readFile(path),
++      importFont: async (file) => {
++        if (file.size > 32*1024*1024) throw new Error('Font exceeds 32 MB');
++        return ec.importFont(file.name, new Uint8Array(await file.arrayBuffer()));
++      },
++      userFonts: () => ec.userFonts(),
+       addFile: async (fileOrUrl, name) => {
+         let bytes;
+         if (typeof fileOrUrl === "string") {
+diff --git a/crates/engine/src/commands/layer.rs b/crates/engine/src/commands/layer.rs
+index ca8aa865..8ab829df 100644
+--- a/crates/engine/src/commands/layer.rs
++++ b/crates/engine/src/commands/layer.rs
+@@ -927,10 +927,40 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
+     // Relative trims: each layer moves its own in/out point by the same amount, so dragging an
+     // edge of several selected layers trims them all together (as in AE).
+     let (in_delta, out_delta) = (snap("inDelta"), snap("outDelta"));
++    // Finite media/precomp sources have bounds; generated and time-remapped layers do not.
++    // Collect durations before the mutable project edit borrow.
++    let source_durations: Vec<(LayerId, Tick)> = {
++        let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?;
++        comp.layers
++            .iter()
++            .filter(|l| ids.contains(&l.id))
++            .filter_map(|l| {
++                if l.props.get("timeRemap").is_some() {
++                    return None;
++                }
++                let duration = match &l.source {
++                    LayerSource::Footage { item } => match s.project.item(*item).map(|i| &i.kind) {
++                        Some(ItemKind::Footage(f)) if f.kind != effectcraft_project::FootageKind::Still => {
++                            Some(f.looped_duration())
++                        }
++                        _ => None,
++                    },
++                    LayerSource::Comp { item } => s.project.comp(*item).map(|c| c.duration),
++                    _ => None,
++                };
++                duration.filter(|d| d.0 > 0).map(|d| (l.id, d))
++            })
++            .collect()
++    };
+     s.edit("Layer Timing", merge_p(p), |proj, _| {
+         let comp = proj.comp_mut(cid).ok_or(EngineError::NoComp)?;
+         let fd = comp.frame_duration();
+         let comp_dur = comp.duration;
++        let finite_source_bounds = |l: &Layer| -> Option<(Tick, Tick)> {
++            let dur = source_durations.iter().find(|(id, _)| *id == l.id).map(|(_, dur)| *dur)?;
++            let (a, b) = (l.comp_time(Tick::ZERO), l.comp_time(dur));
++            Some((a.min(b), a.max(b)))
++        };
+         for l in comp.layers.iter_mut().filter(|l| ids.contains(&l.id)) {
+             let shift = |l: &mut Layer, d: Tick| {
+                 l.start_time += d;
+@@ -954,8 +984,22 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
+                     let d = comp_dur - l.out_point;
+                     shift(l, d);
+                 }
+-                "trimInToTime" => l.in_point = t.min(l.out_point - fd),
+-                "trimOutToTime" => l.out_point = t.max(l.in_point + fd),
++                "trimInToTime" => {
++                    let max_in = l.out_point - fd;
++                    let mut new_in = t.min(max_in);
++                    if let Some((lo, _)) = finite_source_bounds(l) {
++                        new_in = new_in.max(lo.min(max_in));
++                    }
++                    l.in_point = new_in;
++                }
++                "trimOutToTime" => {
++                    let min_out = l.in_point + fd;
++                    let mut new_out = t.max(min_out);
++                    if let Some((_, hi)) = finite_source_bounds(l) {
++                        new_out = new_out.min(hi.max(min_out));
++                    }
++                    l.out_point = new_out;
++                }
+                 _ => {
+                     if let Some(d) = delta {
+                         shift(l, d);
+@@ -965,18 +1009,34 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
+                         shift(l, d);
+                     }
+                     if let Some(i) = inp {
+-                        l.in_point = i.min(l.out_point - fd);
++                        let max_in = l.out_point - fd;
++                        let mut new_in = i.min(max_in);
++                        if let Some((lo, _)) = finite_source_bounds(l) {
++                            new_in = new_in.max(lo.min(max_in));
++                        }
++                        l.in_point = new_in;
+                     }
+                     if let Some(o) = outp {
+-                        l.out_point = o.max(l.in_point + fd);
++                        let min_out = l.in_point + fd;
++                        let mut new_out = o.max(min_out);
++                        if let Some((_, hi)) = finite_source_bounds(l) {
++                            new_out = new_out.min(hi.max(min_out));
++                        }
++                        l.out_point = new_out;
+                     }
+                     // Stops at the comp start/end (a point already past it doesn't jump onto
+                     // it), keeping at least one frame of layer.
+                     if let Some(d) = in_delta {
+                         l.in_point = (l.in_point + d).max(Tick::ZERO.min(l.in_point)).min(l.out_point - fd);
++                        if let Some((lo, _)) = finite_source_bounds(l) {
++                            l.in_point = l.in_point.max(lo.min(l.out_point - fd));
++                        }
+                     }
+                     if let Some(d) = out_delta {
+                         l.out_point = (l.out_point + d).min(comp_dur.max(l.out_point)).max(l.in_point + fd);
++                        if let Some((_, hi)) = finite_source_bounds(l) {
++                            l.out_point = l.out_point.min(hi.max(l.in_point + fd));
++                        }
+                     }
+                 }
+             }
+diff --git a/crates/media/src/pool.rs b/crates/media/src/pool.rs
+index 98c70710..13b35eb0 100644
+--- a/crates/media/src/pool.rs
++++ b/crates/media/src/pool.rs
+@@ -45,6 +45,8 @@ struct Key {
+     matte: [u32; 3],
+     /// A movie frame made at this size for a reduced-resolution render ((0, 0): as decoded).
+     size: (u32, u32),
++    /// Nominal dimensions affect whether a still is resampled or keeps native pixels.
++    nominal: (u32, u32),
+ }
+ 
+ struct Entry {
+@@ -678,7 +680,7 @@ impl Inner {
+                 FloatCurve::Gamma24 => 2,
+             } << 2);
+         let matte = if footage.alpha == AlphaMode::Premultiplied { footage.premul_color.map(f32::to_bits) } else { [0; 3] };
+-        let key = |path: &str, frame| Key { path: path.into(), frame, interp, matte, size: (0, 0) };
++        let key = |path: &str, frame| Key { path: path.into(), frame, interp, matte, size: (0, 0), nominal: (0, 0) };
+         match footage.kind {
+             FootageKind::Sequence if !footage.sequence.is_empty() => {
+                 let i = Self::frame_index(footage.frame_rate, t, footage.sequence_frames(), footage.loop_count);
+@@ -708,17 +710,22 @@ impl Inner {
+         }
+     }
+ 
+-    /// The frame of `footage` at `t`; a movie's resampled to `size` when it can be made at that
+-    /// size directly (see [`FootageSource::frame_at_size`]).
++    /// The frame of `footage` at `t`. Reduced stills are kept in the same budgeted LRU as
++    /// decoded frames, so preview playback does not resample a large PNG on every frame.
+     fn frame_at(self: &Arc<Self>, footage: &Footage, t: Tick, playback: bool, size: Option<(u32, u32)>, float: FloatCurve) -> Result<Arc<Image>> {
+         if !footage.has_video {
+             return Err(MediaError::Unsupported(format!("{}: no video", footage.path)));
+         }
+         let mut loc = Self::locate(footage, t, float);
+         let movie = loc.media_t.is_some();
+-        if movie && let Some(size) = size {
++        let reduced_still = footage.kind == FootageKind::Still
++            && size.is_some_and(|(w, h)| w > 0 && h > 0 && w <= footage.width && h <= footage.height);
++        if (movie || reduced_still) && let Some(size) = size {
+             loc.key.size = size;
+         }
++        if reduced_still {
++            loc.key.nominal = (footage.width, footage.height);
++        }
+         let mut c = lock(&self.cache);
+         // sequential playback of a movie: read the next frame ahead
+         if playback && movie {
+@@ -774,6 +781,22 @@ impl Inner {
+     fn prefetch(self: &Arc<Self>, _footage: &Footage, _t: Tick, _size: Option<(u32, u32)>, _float: FloatCurve) {}
+ 
+     fn decode(&self, loc: &Loc, footage: &Footage) -> Result<Image> {
++        let img = self.decode_source(loc, footage)?;
++        let (w, h) = loc.key.size;
++        // Match Renderer::footage_buf exactly. A differently sized source (for example an
++        // embedded layer or a proxy) keeps its native pixels and its existing placement.
++        if loc.media_t.is_none()
++            && footage.kind == FootageKind::Still
++            && (img.width, img.height) == (footage.width, footage.height)
++            && w > 0 && h > 0 && w <= img.width && h <= img.height
++            && (w, h) != (img.width, img.height)
++        {
++            return Ok(effectcraft_raster::resample(&img, w, h));
++        }
++        Ok(img)
++    }
++
++    fn decode_source(&self, loc: &Loc, footage: &Footage) -> Result<Image> {
+         let op = AlphaOp::of(footage, loc.float);
+         let path = &loc.key.path;
+         match loc.media_t {
+@@ -944,6 +967,41 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn reduced_stills_reuse_exact_pixels_and_invalidate_on_replacement() {
++        let png = |red: u8| {
++            let img = image::RgbaImage::from_fn(16, 12, |x, y| image::Rgba([red, (x * 9) as u8, (y * 13) as u8, 155]));
++            let mut bytes = std::io::Cursor::new(Vec::new());
++            image::DynamicImage::ImageRgba8(img).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
++            Arc::<[u8]>::from(bytes.into_inner())
++        };
++        let pool = MediaPool::new();
++        let f = Footage { path: "/preview.png".into(), kind: FootageKind::Still, width: 16, height: 12, has_video: true, ..Default::default() };
++        pool.add_bytes(&f.path, png(30));
++        let full = pool.frame_at(&f, Tick::ZERO).unwrap();
++        let half = pool.frame_at_size(ItemId(1), &f, Tick::ZERO, 8, 6).unwrap();
++        assert_eq!(*half, effectcraft_raster::resample(&full, 8, 6));
++        let misses = pool.stats().misses;
++        let again = pool.frame_at_size(ItemId(1), &f, Tick::from_seconds_f64(3.0), 8, 6).unwrap();
++        assert!(Arc::ptr_eq(&half, &again));
++        assert_eq!(pool.stats().misses, misses);
++        let quarter = pool.frame_at_size(ItemId(1), &f, Tick::ZERO, 4, 3).unwrap();
++        assert_eq!(*quarter, effectcraft_raster::resample(&full, 4, 3));
++        let ignored = pool.frame_at_size(ItemId(1), &Footage { alpha: AlphaMode::Ignore, ..f.clone() }, Tick::ZERO, 8, 6).unwrap();
++        assert_ne!(*ignored, *half);
++        let mismatch = pool.frame_at_size(ItemId(1), &Footage { width: 32, height: 24, ..f.clone() }, Tick::ZERO, 8, 6).unwrap();
++        assert_eq!(*mismatch, *full);
++        let huge = pool.frame_at_size(ItemId(1), &f, Tick::ZERO, u32::MAX, u32::MAX).unwrap();
++        assert_eq!(*huge, *full);
++        pool.add_bytes(&f.path, png(200));
++        let replaced = pool.frame_at_size(ItemId(1), &f, Tick::ZERO, 8, 6).unwrap();
++        assert_ne!(*replaced, *half);
++        let new_full = pool.frame_at(&f, Tick::ZERO).unwrap();
++        assert_eq!(*replaced, effectcraft_raster::resample(&new_full, 8, 6));
++        pool.set_budget(4096);
++        assert!(pool.stats().bytes <= 4096);
++    }
++
+     /// Conforming a long file's audio reads every chunk at its own time: the sample index times
+     /// ticks per second overflowed `i64` past 12:36 at 48 kHz, and later chunks came out silent
+     /// (#172).
+@@ -1045,7 +1103,7 @@ mod tests {
+     fn lru_respects_budget_and_recycles() {
+         let mut c = Lru::default();
+         let img = || Arc::new(Image::new(16, 16)); // 4 KiB + overhead
+-        let k = |i| Key { path: "a".into(), frame: i, interp: 0, matte: [0; 3], size: (0, 0) };
++        let k = |i| Key { path: "a".into(), frame: i, interp: 0, matte: [0; 3], size: (0, 0), nominal: (0, 0) };
+         let budget = 3 * (4096 + 64);
+         for i in 0..10 {
+             c.insert(k(i), img(), budget);
+diff --git a/crates/text/src/fonts.rs b/crates/text/src/fonts.rs
+index d555954c..493b9340 100644
+--- a/crates/text/src/fonts.rs
++++ b/crates/text/src/fonts.rs
+@@ -336,10 +336,34 @@ pub fn add_font_data(data: Vec<u8>) -> Vec<FaceId> {
+     let names = read_faces_bytes(&data);
+     let mut d = db().write().unwrap_or_else(|e| e.into_inner());
+     let ids = names.into_iter().map(|n| push(&mut d, info_from(n, FaceData::Shared(data.clone()), "user"))).collect();
++    drop(d);
+     family_faces_cache().write().unwrap_or_else(|e| e.into_inner()).clear();
++    crate::layout::clear_cache();
+     ids
+ }
+ 
++/// Validate user font files before adding any faces to the database.
++pub fn add_font_data_checked(data: Vec<u8>) -> Result<Vec<FaceId>, String> {
++    if data.len() > 32 * 1024 * 1024 {
++        return Err("Font exceeds 32 MB".into());
++    }
++    let names = read_faces_bytes(&data);
++    if names.is_empty() || names.len() > 64 {
++        return Err("Invalid TTF/OTF font or collection with more than 64 faces".into());
++    }
++    for name in &names {
++        if name.family.trim().is_empty() || name.family.len() > 512 || name.style.len() > 512 {
++            return Err("Invalid font family or style name".into());
++        }
++        let font = FontRef::from_index(&data, name.index).map_err(|e| format!("Invalid font: {e}"))?;
++        if font.metrics(Size::unscaled(), LocationRef::default()).units_per_em == 0
++            || font.glyph_metrics(Size::unscaled(), LocationRef::default()).advance_width(skrifa::GlyphId::new(0)).is_none() {
++            return Err(format!("Font has no usable glyph metrics: {}", name.family));
++        }
++    }
++    Ok(add_font_data(data))
++}
++
+ /// Held for a whole system scan: a concurrent caller waits for the complete list instead of
+ /// returning early and resolving against a half-filled database.
+ static SCAN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+@@ -497,11 +521,11 @@ fn resolve_in(family: &str, style: &str) -> Option<Resolved> {
+     if fam.is_empty() {
+         return None;
+     }
+-    if let Some(f) = fam.iter().find(|f| f.info.style.eq_ignore_ascii_case(style)) {
++    if let Some(f) = fam.iter().rev().find(|f| f.info.style.eq_ignore_ascii_case(style)) {
+         return Some(Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false });
+     }
+     let (w, it) = style_wants(style);
+-    let best = fam.iter().min_by_key(|f| {
++    let best = fam.iter().rev().min_by_key(|f| {
+         let italic_pen = if f.info.italic == it { 0 } else { 1000 };
+         italic_pen + (f.info.weight as i32 - w as i32).unsigned_abs()
+     })?;
+@@ -518,8 +542,9 @@ fn resolve_by_name(name: &str) -> Option<Resolved> {
+     let faces = all_faces();
+     let f = faces
+         .iter()
++        .rev()
+         .find(|f| f.info.postscript.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(name)))
+-        .or_else(|| faces.iter().find(|f| f.info.full_name.eq_ignore_ascii_case(name)))?;
++        .or_else(|| faces.iter().rev().find(|f| f.info.full_name.eq_ignore_ascii_case(name)))?;
+     Some(Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false })
+ }
+ 
+diff --git a/crates/text/src/layout.rs b/crates/text/src/layout.rs
+index c1503215..be6f1b4f 100644
+--- a/crates/text/src/layout.rs
++++ b/crates/text/src/layout.rs
+@@ -1028,6 +1028,10 @@ pub fn layout_rich_uncached(text: &str, runs: &[(Range<usize>, TextStyle)], para
+     lay
+ }
+ 
++pub(crate) fn clear_cache() {
++    cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
++}
++
+ fn cache() -> &'static Mutex<HashMap<u64, (u64, Arc<Layout>)>> {
+     static C: OnceLock<Mutex<HashMap<u64, (u64, Arc<Layout>)>>> = OnceLock::new();
+     C.get_or_init(Default::default)
+diff --git a/crates/ui-egui/src/header.rs b/crates/ui-egui/src/header.rs
+index fb381cfd..9bd1cfb9 100644
+--- a/crates/ui-egui/src/header.rs
++++ b/crates/ui-egui/src/header.rs
+@@ -1,15 +1,14 @@
+-//! The Tools bar: home, the tool slots, tool options, snapping, workspaces and the community
+-//! buttons (Discord is always one click away).
++//! The Tools bar: home, tool slots, tool options, snapping and workspaces.
+ 
+ use crate::i18n::{tr, tr_args};
+ use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+ use serde_json::json;
+ 
+-use crate::icons::{self, Icon};
++use crate::icons::Icon;
+ use crate::state::Tool;
+ use crate::theme::Tokens;
+ use crate::widgets;
+-use crate::{Dialog, EffectcraftApp};
++use crate::EffectcraftApp;
+ use effectcraft_color::BlendMode;
+ use effectcraft_engine::commands::shape_tool::{PaintKind, ToolPaint};
+ use effectcraft_engine::project::{LayerId, LayerSource, PropGroup};
+@@ -23,17 +22,6 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     let cy = rect.center().y;
+     let mut x = rect.min.x + if app.integrated_titlebar && !app.ui.show_menu_bar { 80.0 } else { 10.0 };
+ 
+-    // Brand mark.
+-    let brand = Rect::from_min_size(pos2(x, cy - 12.0), vec2(24.0, 24.0));
+-    paint_logo(&p, brand);
+-    let bresp = ui.interact(brand, egui::Id::new("brand"), Sense::click());
+-    app.auto.add_response("header.about", &bresp, "About EffectCraft");
+-    widgets::focus_outline(ui, &bresp, &t);
+-    if bresp.on_hover_text(tr("About EffectCraft")).clicked() {
+-        app.dialog = Some(Dialog::About);
+-    }
+-    x += 32.0;
+-
+     // Home.
+     let home = Rect::from_min_size(pos2(x, cy - 13.0), vec2(26.0, 26.0));
+     let home_response = widgets::icon_button(ui, home, Icon::Home, app.ui.start_screen, &t, egui::Id::new("tool-home")).on_hover_text(tr("Home"));
+@@ -182,32 +170,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     let label = p.text(pos2(snap.max.x + 4.0, cy), Align2::LEFT_CENTER, tr("Snapping"), Tokens::ui(12.0), t.text_dim);
+     snapping_options(app, ui, Rect::from_min_size(pos2(label.max.x + 2.0, cy - 9.0), vec2(18.0, 18.0)));
+ 
+-    // Right side: community buttons, workspaces.
++    // Right side: workspaces.
+     let mut rx = rect.max.x - 10.0;
+-    // The pill fits its label (icon, gap, text) with even padding: it was a fixed 104 px with the
+-    // text at its left, which left a wide gap on the right (#581).
+-    let label = p.layout_no_wrap(tr("Discord").to_string(), Tokens::semibold(12.0), Color32::WHITE);
+-    let discord = Rect::from_min_max(pos2(rx - (10.0 + 14.0 + 6.0 + label.size().x + 12.0), cy - 13.0), pos2(rx, cy + 13.0));
+-    let dresp = ui.interact(discord, egui::Id::new("hdr-discord"), Sense::click());
+-    let dc = Color32::from_rgb(0x58, 0x65, 0xf2);
+-    p.rect_filled(discord, 13.0, if dresp.hovered() { dc.gamma_multiply(1.2) } else { dc });
+-    icons::paint(&p, Rect::from_center_size(pos2(discord.min.x + 17.0, cy), vec2(14.0, 14.0)), Icon::Chat, Color32::WHITE);
+-    p.galley(pos2(discord.min.x + 30.0, cy - label.size().y / 2.0), label, Color32::WHITE);
+-    app.auto.add("header.discord", discord, "Join the ArtCraft Discord");
+-    if dresp.on_hover_text(tr("Join the ArtCraft community on Discord")).clicked() {
+-        let _ = app.session.execute("help.discord", json!({}));
+-    }
+-    rx = discord.min.x - 6.0;
+-    for (id, icon, tip, cmd) in
+-        [("hdr-github", Icon::Code, "EffectCraft on GitHub", "help.github"), ("hdr-web", Icon::Globe, "EffectCraft on getartcraft.com", "help.appPage")]
+-    {
+-        let r = Rect::from_min_max(pos2(rx - 26.0, cy - 13.0), pos2(rx, cy + 13.0));
+-        if widgets::icon_button(ui, r, icon, false, &t, egui::Id::new(id)).on_hover_text(tip).clicked() {
+-            let _ = app.session.execute(cmd, json!({}));
+-        }
+-        app.auto.add(&format!("header.{}", &id[4..]), r, tip);
+-        rx = r.min.x - 4.0;
+-    }
+     // Appearance: Sync with System, Light, Dark (a monitor, sun or moon), one click to the next.
+     let (icon, mode) = match app.session.prefs.appearance.appearance_mode.as_str() {
+         "auto" => (Icon::Monitor, tr("Sync with System")),
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index 105a075e..fd368f04 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -144,6 +144,9 @@ pub struct Hooks {
+     /// The system appearance for Settings ▸ Appearance ▸ Sync with System (the desktop app reads
+     /// the Linux desktop portal); without it, what egui reports.
+     pub system_theme: Option<SystemThemeFn>,
++    /// Optional ZIP bridge supplied by the browser/iPad host.
++    pub bridge_state: Option<Box<dyn Fn() -> Option<crate::menus::BridgeState>>>,
++    pub bridge_action: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
+     pub pick_files: Option<Box<dyn Fn(&[&str]) -> Vec<String>>>,
+     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+     pub pick_open_project: Option<Box<dyn Fn() -> Option<String>>>,
+diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
+index 8b5fd1c3..6c5d8bd7 100644
+--- a/crates/ui-egui/src/menus.rs
++++ b/crates/ui-egui/src/menus.rs
+@@ -12,6 +12,57 @@ use crate::dock::PanelKind;
+ use crate::state::{Resolution, Tool};
+ use effectcraft_engine::menus::{MenuEntry, MenuNode};
+ 
++/// State of the optional host ZIP bridge, used by the File menu.
++#[derive(Clone, Default, serde::Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct BridgeState {
++    pub import_enabled: bool,
++    pub export_enabled: bool,
++    pub save_enabled: bool,
++    #[serde(default)]
++    pub fonts_enabled: bool,
++    pub status: String,
++}
++
++const BRIDGE_COMMANDS: &[(&str, &str)] = &[
++    ("bridge.importAEZip", "Import AE ZIP…"),
++    ("bridge.exportProjectZip", "Export Project ZIP…"),
++    ("bridge.saveZipToFiles", "Save ZIP to Files…"),
++    ("bridge.importFonts", "Import Fonts…"),
++];
++
++fn bridge_state(app: &EffectcraftApp) -> Option<BridgeState> {
++    app.hooks.bridge_state.as_ref().and_then(|f| f())
++}
++
++fn bridge_enabled(state: &BridgeState, id: &str) -> bool {
++    match id {
++        "bridge.importAEZip" => state.import_enabled,
++        "bridge.exportProjectZip" => state.export_enabled,
++        "bridge.saveZipToFiles" => state.save_enabled,
++        "bridge.importFonts" => state.fonts_enabled,
++        _ => false,
++    }
++}
++
++fn bridge_entries(app: &EffectcraftApp) -> Vec<MenuNode> {
++    if bridge_state(app).is_none() { return Vec::new(); }
++    BRIDGE_COMMANDS.iter().map(|(id, label)| MenuNode::Item(MenuEntry {
++        label: (*label).into(), command: (*id).into(), params: Value::Null, shortcut: None, alt_shortcuts: Vec::new(),
++    })).collect()
++}
++
++fn file_nodes(app: &EffectcraftApp, children: &[MenuNode]) -> Vec<MenuNode> {
++    let mut nodes = children.to_vec();
++    let entries = bridge_entries(app);
++    if !entries.is_empty() {
++        let at = nodes.iter().position(|n| matches!(n, MenuNode::Submenu { label, .. } if label == "Save As"))
++            .map_or(nodes.len(), |i| i.saturating_add(1));
++        nodes.splice(at..at, std::iter::once(MenuNode::Separator).chain(entries).chain(std::iter::once(MenuNode::Separator)));
++    }
++    nodes
++}
++
+ pub struct UiCommand {
+     pub id: &'static str,
+     pub label: &'static str,
+@@ -28,6 +79,10 @@ macro_rules! uic {
+ /// UI-only commands (not in the AE menus; shortcuts and the command palette).
+ pub const UI_COMMANDS: &[UiCommand] = &[
+     uic!("window.dockAction", "Docking Action", [], None),
++    uic!("bridge.importAEZip", "Import AE ZIP…", ["File"], None),
++    uic!("bridge.exportProjectZip", "Export Project ZIP…", ["File"], None),
++    uic!("bridge.saveZipToFiles", "Save ZIP to Files…", ["File"], None),
++    uic!("bridge.importFonts", "Import Fonts…", ["File"], None),
+     uic!("playback.ramPreview", "Preview (Numpad 0)", [], Some("Num0")),
+     uic!("playback.preview.shiftSpacebar", "Preview (Shift+Spacebar)", [], Some("Shift+Space")),
+     uic!("playback.preview.shiftNumpad0", "Preview (Shift+Numpad 0)", [], Some("Shift+Num0")),
+@@ -291,6 +346,20 @@ fn only_comp(p: &Value) -> Option<effectcraft_engine::project::ItemId> {
+ 
+ /// Execute a UI or engine command by id.
+ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
++    if BRIDGE_COMMANDS.iter().any(|(command, _)| *command == id) {
++        let state = bridge_state(app).ok_or("The iPad ZIP bridge is unavailable")?;
++        if !bridge_enabled(&state, id) {
++            return Err(if id == "bridge.saveZipToFiles" {
++                "Export Project ZIP first, then save the prepared ZIP".into()
++            } else {
++                "Wait for the ZIP bridge to finish loading or its current operation".into()
++            });
++        }
++        let action = app.hooks.bridge_action.as_ref().ok_or("The iPad ZIP bridge handler is unavailable")?;
++        action(id)?;
++        ctx.request_repaint();
++        return Ok(Value::Null);
++    }
+     if id == "effects.copyPresetsFolderPath" {
+         return frontend(app, ctx, id, params);
+     }
+@@ -1554,6 +1623,9 @@ pub(crate) fn entry_checked(app: &EffectcraftApp, e: &MenuEntry) -> Option<bool>
+ }
+ 
+ pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
++    if BRIDGE_COMMANDS.iter().any(|(id, _)| *id == e.command) {
++        return bridge_state(app).is_some_and(|s| bridge_enabled(&s, &e.command));
++    }
+     if app.ui.focused == PanelKind::Project {
+         match e.command.as_str() {
+             "edit.duplicate" => {
+@@ -1582,7 +1654,7 @@ pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
+ 
+ /// Every menu entry, flattened with its submenu path.
+ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
+-    effectcraft_engine::menus::entries()
++    let mut items: Vec<MenuItem> = effectcraft_engine::menus::entries()
+         .into_iter()
+         .map(|(path, e)| MenuItem {
+             id: e.command.clone(),
+@@ -1592,8 +1664,16 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
+             enabled: entry_enabled(app, e),
+             checked: entry_checked(app, e),
+             params: e.params.clone(),
+-        })
+-        .collect()
++        }).collect();
++    for node in bridge_entries(app) {
++        if let MenuNode::Item(e) = node {
++            items.push(MenuItem {
++                id: e.command.clone(), label: e.label.clone(), path: vec!["File".into()],
++                shortcut: None, enabled: entry_enabled(app, &e), checked: None, params: e.params,
++            });
++        }
++    }
++    items
+ }
+ 
+ /// Shortcut text in this OS's notation (`⇧⌘K` on macOS, `Ctrl+Shift+K` elsewhere).
+@@ -1981,7 +2061,14 @@ pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
+                 if let MenuNode::Submenu { label, children } = node {
+                     let r = ui.menu_button(crate::i18n::label(app, "", label), |ui| {
+                         ui.set_min_width(if label == "Effect" { 200.0 } else { 280.0 });
+-                        crate::widgets::menu_scroll(ui, |ui| menu_nodes(app, ui, children, &mut clicked, &mut nav, 0));
++                        crate::widgets::menu_scroll(ui, |ui| {
++                            if label == "File" {
++                                let nodes = file_nodes(app, children);
++                                menu_nodes(app, ui, &nodes, &mut clicked, &mut nav, 0);
++                            } else {
++                                menu_nodes(app, ui, children, &mut clicked, &mut nav, 0);
++                            }
++                        });
+                     });
+                     nav.top(&r.response);
+                     app.auto.add(&format!("menu.{label}"), r.response.rect, label);
+@@ -2004,7 +2091,8 @@ pub(crate) fn menu_contents(app: &mut EffectcraftApp, ui: &mut egui::Ui, name: &
+     if let Some(MenuNode::Submenu { children, .. }) =
+         effectcraft_engine::menus::menu_bar().iter().find(|n| matches!(n, MenuNode::Submenu { label, .. } if label == name))
+     {
+-        menu_nodes(app, ui, children, &mut clicked, &mut crate::menu_keys::Nav::default(), 0);
++        let nodes = if name == "File" { file_nodes(app, children) } else { children.clone() };
++        menu_nodes(app, ui, &nodes, &mut clicked, &mut crate::menu_keys::Nav::default(), 0);
+     }
+     clicked.map(|(id, params)| (id, if params.is_null() { json!({}) } else { params }))
+ }
+@@ -2104,7 +2192,7 @@ pub(crate) fn submenu_at(app: &mut EffectcraftApp, ui: &mut egui::Ui, path: &[&s
+ }
+ 
+ /// The menu bar's entry for `command` in a panel's context menu (see [`submenu_at`]).
+-pub(crate) fn entry_for(app: &EffectcraftApp, ui: &mut egui::Ui, command: &str, clicked: &mut Option<(String, Value)>) {
++pub(crate) fn entry_for(app: &mut EffectcraftApp, ui: &mut egui::Ui, command: &str, clicked: &mut Option<(String, Value)>) {
+     if let Some((_, e)) = effectcraft_engine::menus::entries().into_iter().find(|(_, e)| e.command == command)
+         && menu_entry(app, ui, e).clicked()
+     {
+@@ -2124,7 +2212,7 @@ fn gutter(checked: bool) -> egui::Atom<'static> {
+     (if checked { "✔" } else { "" }).atom_size(egui::vec2(14.0, 14.0))
+ }
+ 
+-fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::Response {
++fn menu_entry(app: &mut EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::Response {
+     let (label, check, enabled) = (entry_label(app, e), gutter(entry_checked(app, e) == Some(true)), entry_enabled(app, e));
+     // Edit ▸ Label's entries show the label's colour before its name.
+     if e.command == "edit.label"
+@@ -2132,13 +2220,16 @@ fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::R
+     {
+         let out = ui.add_enabled_ui(enabled, |ui| egui::Button::new((check, crate::widgets::label_swatch(), label)).atom_ui(ui)).inner;
+         crate::widgets::paint_label_swatch(ui, &out, l, &app.tokens);
++        app.auto.add(&format!("menu.command.{}", e.command), out.response.rect, &e.label);
+         return out.response;
+     }
+     let mut b = egui::Button::new((check, label));
+     if let Some(s) = entry_shortcut(app, e) {
+         b = b.shortcut_text(shortcut_text(&s));
+     }
+-    ui.add_enabled(enabled, b)
++    let r = ui.add_enabled(enabled, b);
++    app.auto.add(&format!("menu.command.{}", e.command), r.rect, &e.label);
++    r
+ }
+ 
+ /// View ▸ Zoom In / Zoom Out: the next standard magnification (as a share of screen pixels, so
+@@ -2194,6 +2285,53 @@ mod tests {
+         assert_eq!(starts, vec![Some(egui::Modifiers::SHIFT), Some(egui::Modifiers::SHIFT)]);
+     }
+ 
++    #[test]
++    fn bridge_file_menu_is_absent_without_a_host() {
++        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
++        assert!(bridge_entries(&app).is_empty());
++        assert!(invoke(&mut app, &egui::Context::default(), "bridge.importAEZip", json!({})).is_err());
++    }
++
++    #[test]
++    fn bridge_file_menu_enablement_and_dispatch_follow_host_state() {
++        use std::cell::RefCell;
++        use std::rc::Rc;
++        let state = Rc::new(RefCell::new(BridgeState { import_enabled: true, export_enabled: true, ..Default::default() }));
++        let calls = Rc::new(RefCell::new(Vec::<String>::new()));
++        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
++        let shared = state.clone();
++        app.hooks.bridge_state = Some(Box::new(move || Some(shared.borrow().clone())));
++        let recorded = calls.clone();
++        app.hooks.bridge_action = Some(Box::new(move |id| { recorded.borrow_mut().push(id.into()); Ok(()) }));
++        let ctx = egui::Context::default();
++        let save = menu_items(&app).into_iter().find(|e| e.id == "bridge.saveZipToFiles").unwrap();
++        assert!(!save.enabled);
++        assert_eq!(save.path, vec!["File"]);
++        assert!(invoke(&mut app, &ctx, "bridge.saveZipToFiles", json!({})).is_err());
++        assert!(calls.borrow().is_empty());
++        invoke(&mut app, &ctx, "bridge.importAEZip", json!({})).unwrap();
++        assert_eq!(*calls.borrow(), vec!["bridge.importAEZip"]);
++        state.borrow_mut().save_enabled = true;
++        invoke(&mut app, &ctx, "bridge.saveZipToFiles", json!({})).unwrap();
++        assert_eq!(calls.borrow().len(), 2);
++        app.hooks.bridge_action = Some(Box::new(|_| Err("Host failure".into())));
++        assert_eq!(invoke(&mut app, &ctx, "bridge.exportProjectZip", json!({})), Err("Host failure".into()));
++    }
++
++    #[test]
++    fn bridge_file_menu_appears_immediately_after_save_as() {
++        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
++        app.hooks.bridge_state = Some(Box::new(|| Some(BridgeState::default())));
++        let children = effectcraft_engine::menus::menu_bar().iter().find_map(|n| match n {
++            MenuNode::Submenu { label, children } if label == "File" => Some(children),
++            _ => None,
++        }).unwrap();
++        let nodes = file_nodes(&app, children);
++        let save_as = nodes.iter().position(|n| matches!(n, MenuNode::Submenu { label, .. } if label == "Save As")).unwrap();
++        let import = nodes.iter().position(|n| matches!(n, MenuNode::Item(e) if e.command == "bridge.importAEZip")).unwrap();
++        assert_eq!(import, save_as + 2);
++    }
++
+     #[test]
+     fn every_ui_shortcut_parses() {
+         for c in UI_COMMANDS {
+diff --git a/crates/ui-egui/src/panels/text_panels.rs b/crates/ui-egui/src/panels/text_panels.rs
+index ae2294f1..7436fbe0 100644
+--- a/crates/ui-egui/src/panels/text_panels.rs
++++ b/crates/ui-egui/src/panels/text_panels.rs
+@@ -593,6 +593,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+         )
+     });
+     let preview = app.session.prefs.type_.font_preview;
++    let font_revision = effectcraft_text::fonts::all_faces().len();
+     let t = app.tokens;
+     // The Variable Fonts filter (After Effects 26.3) stays as set while the app runs, like the
+     // menu's other settings; the search query resets on every open.
+@@ -626,7 +627,8 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+     widgets::note_open_popup_list(ui.ctx());
+     let area = egui::Area::new(id.with("area")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(anchor).show(ui.ctx(), |ui| {
+         egui::Frame::popup(ui.style()).show(ui, |ui| {
+-            ui.set_width(rect.width().max(180.0));
++            let width = rect.width().max(if preview { 320.0 } else { 200.0 });
++            ui.set_width(width.min((screen.width() - 24.0).max(1.0)));
+             // Filter row: a checkbox that keeps only the variable fonts.
+             let filter_h = 22.0;
+             let row = ui.add_sized([ui.available_width(), filter_h], egui::Button::selectable(false, ""));
+@@ -696,13 +698,10 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+                     let resp = ui.add_sized([row_width, 24.0], egui::Button::selectable(index == state.selected, ""));
+                     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), index == state.selected, &r.display));
+                     let label_rect = Rect::from_min_size(resp.rect.min + vec2(5.0, 0.0), vec2(label_width - 5.0, resp.rect.height()));
+-                    ui.painter().with_clip_rect(label_rect.intersect(ui.clip_rect())).text(
+-                        label_rect.left_center(),
+-                        Align2::LEFT_CENTER,
+-                        &r.display,
+-                        Tokens::ui(12.0),
+-                        t.text,
+-                    );
++                    let label = egui::WidgetText::from(egui::RichText::new(&r.display).font(Tokens::ui(12.0)).color(t.text))
++                        .into_galley(ui, Some(egui::TextWrapMode::Truncate), label_rect.width().max(0.0), egui::TextStyle::Body);
++                    ui.painter().with_clip_rect(label_rect.intersect(ui.clip_rect())).galley(
++                        pos2(label_rect.left(), label_rect.center().y - label.size().y * 0.5), label, t.text);
+                     if ui.is_rect_visible(resp.rect) {
+                         app.auto.add(&format!("{auto}.option.{}", r.family), resp.rect, &r.display);
+                     }
+@@ -710,7 +709,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+                         resp.scroll_to_me(None);
+                     }
+                     if preview && ui.is_rect_visible(resp.rect) {
+-                        let key = egui::Id::new(("font-preview", &r.family));
++                        let key = egui::Id::new(("font-preview", &r.family, font_revision));
+                         let lines: std::sync::Arc<Vec<Vec<[f32; 2]>>> = match ui.data(|d| d.get_temp(key)) {
+                             Some(l) => l,
+                             None => {
+@@ -722,7 +721,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+                         // Scaled and placed to fit the row's preview column, and clipped to the row (#577).
+                         let room = Rect::from_min_max(pos2(resp.rect.max.x - 95.0, resp.rect.min.y + 1.0), pos2(resp.rect.max.x - 6.0, resp.rect.max.y - 1.0));
+                         if let Some((k, o)) = fit_preview(&lines, room, resp.rect.center().y + 5.0) {
+-                            let painter = ui.painter().with_clip_rect(resp.rect.intersect(ui.clip_rect()));
++                            let painter = ui.painter().with_clip_rect(room.intersect(ui.clip_rect()));
+                             for poly in lines.iter() {
+                                 let pts: Vec<egui::Pos2> =
+                                     poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
+diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
+index 163e6507..3d875706 100644
+--- a/crates/ui-egui/src/panels/timeline.rs
++++ b/crates/ui-egui/src/panels/timeline.rs
+@@ -72,7 +72,7 @@ pub(crate) fn bar_color(label: Color32, selected: bool) -> Color32 {
+ /// How far a layer bar's trim zones reach past its ends and into it, in points. After Effects'
+ /// zones straddle each end, so the pointer needn't land inside the bar.
+ const TRIM_OUTSIDE: f32 = 4.0;
+-const TRIM_INSIDE: f32 = 5.0;
++const TRIM_INSIDE: f32 = 14.0;
+ 
+ /// A layer bar's body (drag to move) and its In/Out trim zones. Short bars keep their middle
+ /// third as body; a bar too short for that is all trim zones (the Out one on top).
+@@ -2301,6 +2301,17 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+                     let body = ui.interact(body_r, egui::Id::new(("bar", layer.id.0)), Sense::click_and_drag());
+                     let lin = ui.interact(in_r, egui::Id::new(("bar-in", layer.id.0)), Sense::drag());
+                     let lout = ui.interact(out_r, egui::Id::new(("bar-out", layer.id.0)), Sense::drag());
++                    // Visual trim hints. The interactive edge remains 14 px wide.
++                    let trim_top = bar.min.y + 4.0;
++                    let trim_bottom = bar.max.y - 4.0;
++                    if lin.hovered() || lin.dragged() {
++                        let x = bar.min.x + 2.0;
++                        gp.line_segment([pos2(x, trim_top), pos2(x, trim_bottom)], Stroke::new(2.0, Color32::WHITE));
++                    }
++                    if lout.hovered() || lout.dragged() {
++                        let x = bar.max.x - 2.0;
++                        gp.line_segment([pos2(x, trim_top), pos2(x, trim_bottom)], Stroke::new(2.0, Color32::WHITE));
++                    }
+                     app.auto.add(&format!("timeline.layer.{}.bar.in", layer.id.0), in_r, "Trim In");
+                     app.auto.add(&format!("timeline.layer.{}.bar.out", layer.id.0), out_r, "Trim Out");
+                     if lin.hovered() || lout.hovered() || lin.dragged() || lout.dragged() {
+@@ -2746,8 +2757,46 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+                 let is_tr_rot = layer.transform().and_then(|t| t.get("rotation")).is_some_and(|r| r.uid == prop.uid);
+                 let base = if is_tr_rot && prop.name == "Rotation" && layer.is_3d() { "Z Rotation".to_string() } else { prop.name.clone() };
+                 let pname = if prop.has_expression() { format!("{base}  =") } else { base };
+-                lp.text(pos2(name_x, cy), Align2::LEFT_CENTER, &pname, Tokens::ui(12.0), if prop.has_expression() { t.expr_text } else { t.text });
+-                let name_rect = Rect::from_min_max(pos2(name_x, r.min.y), pos2(cw.switches - 2.0, r.max.y));
++                lp.text(
++                    pos2(name_x, cy),
++                    Align2::LEFT_CENTER,
++                    &pname,
++                    Tokens::ui(12.0),
++                    if prop.has_expression() { t.expr_text } else { t.text },
++                );
++                // Touch-friendly expression control, without Alt+click on the stopwatch.
++                if !prop.static_only {
++                    let has_expr = prop.has_expression();
++                    let expr_enabled = prop.expr.as_ref().is_some_and(|ex| ex.enabled);
++                    let br = Rect::from_center_size(pos2(cw.switches - 12.0, cy), vec2(22.0, 18.0));
++                    let expr_button = ui.interact(br, egui::Id::new(("expr-button", uid)), Sense::click())
++                        .on_hover_text(if has_expr { "Enable / Disable Expression" } else { "Add Expression" });
++                    lp.rect_filled(br, 2.0, if has_expr {
++                        Color32::from_rgb(0x38, 0x28, 0x24)
++                    } else if expr_button.hovered() {
++                        t.row_selected
++                    } else {
++                        t.field_bg
++                    });
++                    lp.rect_stroke(br, 2.0, Stroke::new(1.0, if expr_button.hovered() { t.text_dim } else { t.separator }), StrokeKind::Inside);
++                    lp.text(br.center(), Align2::CENTER_CENTER, "=", Tokens::semibold(13.0), if expr_enabled {
++                        Color32::from_rgb(0xe8, 0x7c, 0x5c)
++                    } else if has_expr {
++                        Color32::from_rgb(0xa8, 0x68, 0x58)
++                    } else {
++                        t.text_dim
++                    });
++                    app.auto.add(&format!("timeline.prop.{uid}.expressionButton"), br, if has_expr { "Expression" } else { "Add Expression" });
++                    if expr_button.clicked() {
++                        if let Some(ex) = prop.expr.as_ref() {
++                            actions.push(("prop.setExpression".into(), json!({"layer": layer.id.0, "prop": uid, "enabled": !ex.enabled})));
++                        } else {
++                            actions.push(("prop.setExpression".into(), json!({"layer": layer.id.0, "prop": uid})));
++                        }
++                    }
++                }
++                let name_right = if prop.static_only { cw.switches - 2.0 } else { cw.switches - 25.0 };
++                let name_rect = Rect::from_min_max(pos2(name_x, r.min.y), pos2(name_right, r.max.y));
+                 let name_resp = ui.interact(name_rect, egui::Id::new(("pname", uid)), Sense::click_and_drag());
+                 app.auto.add(&format!("timeline.prop.{uid}.name"), name_rect, &prop.name);
+                 if name_resp.drag_started() {
+@@ -2985,6 +3034,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     }
+     if outline_empty.clicked() && !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
+         actions.push(("layer.select".into(), json!({"layers": []})));
++        actions.push(("keys.select".into(), json!({"keys": []})));
+     }
+     if let (Some(start), Some(end)) = (ctx.input(|i| i.pointer.press_origin()), outline_empty.interact_pointer_pos())
+         && outline_empty.dragged()
+diff --git a/xtask/src/main.rs b/xtask/src/main.rs
+index 4d541feb..c8af9c02 100644
+--- a/xtask/src/main.rs
++++ b/xtask/src/main.rs
+@@ -60,6 +60,7 @@ const LAYERS: &[(&str, u8)] = &[
+     ("effectcraft", 6),
+     ("cli", 6),
+     ("web", 6),
++    ("ios", 6),
+ ];
+ 
+ /// Allowed same-layer edges (from, to).

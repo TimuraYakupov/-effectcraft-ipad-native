@@ -1,0 +1,47 @@
+name: Native iPad preview
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-ipad:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: '16.0'
+      CARGO_BUILD_JOBS: '3'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare pinned source
+        run: |
+          git init effectcraft
+          git -C effectcraft remote add origin https://github.com/storytold/effectcraft.git
+          git -C effectcraft fetch --depth 1 origin 05955c08b4fd025f1a09882df72e6dbff1a8148a
+          git -C effectcraft checkout --detach FETCH_HEAD
+          git -C effectcraft apply --check ../patches/ipad-native.patch
+          git -C effectcraft apply ../patches/ipad-native.patch
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup target add --toolchain 1.95.0 aarch64-apple-ios
+      - name: Locate iOS SDK
+        run: |
+          xcodebuild -version
+          echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: Compile native ARM64 app
+        working-directory: effectcraft
+        run: cargo +1.95.0 build --locked --release --target aarch64-apple-ios -p effectcraft-ios
+      - name: Package unsigned IPA
+        run: python3 scripts/package_ipa.py
+      - name: Upload IPA and build details
+        uses: actions/upload-artifact@v4
+        with:
+          name: EffectCraft-Native-Preview
+          path: output/
+          if-no-files-found: error
+          retention-days: 14
