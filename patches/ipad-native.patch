@@ -55,22 +55,166 @@ index 00000000..4d925267
 +serde_json.workspace = true
 +log.workspace = true
 +winit = { version = "0.30", default-features = false }
+diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
+new file mode 100644
+index 00000000..18abfa78
+--- /dev/null
++++ b/apps/effectcraft-ios/src/diagnostics.rs
+@@ -0,0 +1,86 @@
++//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
++use std::path::PathBuf;
++
++use effectcraft_ui_egui::EffectcraftApp;
++use eframe::egui;
++
++pub struct DiagnosticApp {
++    pub app: EffectcraftApp,
++    pub directory: PathBuf,
++    pub startup_error: Option<String>,
++    pub open: bool,
++    pub previous: bool,
++    pub text: String,
++    pub last_playing: bool,
++}
++
++impl DiagnosticApp {
++    fn refresh(&mut self) {
++        let name = if self.previous { "effectcraft.1.log" } else { "effectcraft.log" };
++        self.text = crate::journal::read_tail(&self.directory.join(name)).unwrap_or_else(|e| format!("Cannot read {name}: {e}"));
++    }
++}
++
++impl eframe::App for DiagnosticApp {
++    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
++        self.app.logic(ctx, frame);
++        if self.last_playing != self.app.playback.playing {
++            self.last_playing = self.app.playback.playing;
++            log::info!(target: "effectcraft_diagnostics", "playback playing={}", self.last_playing);
++        }
++    }
++
++    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
++        self.app.raw_input_hook(ctx, input);
++    }
++
++    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
++        self.app.ui(ui, frame);
++        let ctx = ui.ctx();
++        egui::Area::new(egui::Id::new("ipad-diagnostics-button"))
++            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
++            .order(egui::Order::Foreground)
++            .show(ctx, |ui| {
++                if ui.button("Diagnostics · build 2").clicked() {
++                    self.open = !self.open;
++                    self.refresh();
++                }
++            });
++        if self.open {
++            let mut open = self.open;
++            egui::Window::new("iPad diagnostics · build 2").open(&mut open).default_width(620.0).show(ctx, |ui| {
++                ui.label("One render worker · CPU/layer/media/GPU frame caches: 64 MiB each");
++                ui.label("After a crash, relaunch once and select Previous run. The last two runs are kept.");
++                if let Some(error) = &self.startup_error {
++                    ui.colored_label(egui::Color32::RED, format!("Log setup failed: {error}"));
++                }
++                ui.horizontal(|ui| {
++                    if ui.selectable_label(!self.previous, "Current run").clicked() {
++                        self.previous = false;
++                        self.refresh();
++                    }
++                    if ui.selectable_label(self.previous, "Previous run").clicked() {
++                        self.previous = true;
++                        self.refresh();
++                    }
++                    if ui.button("Refresh").clicked() {
++                        self.refresh();
++                    }
++                    if ui.button("Copy log").clicked() {
++                        ctx.copy_text(self.text.clone());
++                    }
++                });
++                ui.label(self.directory.to_string_lossy());
++                egui::ScrollArea::both().max_height(380.0).stick_to_bottom(true).show(ui, |ui| {
++                    ui.add(egui::Label::new(egui::RichText::new(&self.text).monospace()).selectable(true));
++                });
++            });
++            self.open = open;
++        }
++    }
++
++    fn on_exit(&mut self) {
++        log::info!(target: "effectcraft_diagnostics", "clean_exit");
++        self.app.on_exit();
++    }
++}
+diff --git a/apps/effectcraft-ios/src/journal.rs b/apps/effectcraft-ios/src/journal.rs
+new file mode 100644
+index 00000000..536a1b26
+--- /dev/null
++++ b/apps/effectcraft-ios/src/journal.rs
+@@ -0,0 +1,41 @@
++//! Bounded journal reading, also testable without a UI or Apple SDK.
++use std::io::{Read, Seek, SeekFrom};
++use std::path::{Path, PathBuf};
++
++const MAX_TAIL: u64 = 64 * 1024;
++
++pub fn log_directory() -> PathBuf {
++    std::env::var_os("HOME").map(PathBuf::from).map(|p| p.join("Documents")).unwrap_or_else(std::env::temp_dir).join("EffectCraftDiagnostics/Logs")
++}
++
++pub fn read_tail(path: &Path) -> Result<String, String> {
++    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
++    let length = file.metadata().map_err(|e| e.to_string())?.len();
++    file.seek(SeekFrom::Start(length.saturating_sub(MAX_TAIL))).map_err(|e| e.to_string())?;
++    let mut bytes = Vec::new();
++    file.take(MAX_TAIL).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
++    Ok(String::from_utf8_lossy(&bytes).into_owned())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn journal_tail_is_bounded_and_survives_invalid_utf8() {
++        let path = std::env::temp_dir().join(format!("ec-diag-tail-{}", std::process::id()));
++        let mut bytes = vec![b'a'; MAX_TAIL as usize + 10];
++        bytes.extend_from_slice(&[0xff, b'\n', b'z']);
++        std::fs::write(&path, &bytes).unwrap();
++        let text = read_tail(&path).unwrap();
++        assert!(text.ends_with("\nz"));
++        assert!(text.len() <= MAX_TAIL as usize + 2);
++        std::fs::remove_file(path).unwrap();
++    }
++
++    #[test]
++    fn missing_journal_is_a_recoverable_error() {
++        let path = std::env::temp_dir().join(format!("ec-diag-absent-{}", std::process::id()));
++        assert!(read_tail(&path).is_err());
++    }
++}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..fd5ad141
+index 00000000..edbd32ce
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,79 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
-+//! eframe and the compositor share a Metal device. No WebView or WASM runtime.
++//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 +
 +use effectcraft_ui_egui::EffectcraftApp;
 +use serde_json::json;
++mod diagnostics;
++mod journal;
 +
 +fn main() -> eframe::Result {
 +    effectcraft_engine::logging::install();
 +    effectcraft_engine::logging::install_panic_hook();
++    let directory = journal::log_directory();
++    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
++    log::info!(target: "effectcraft_diagnostics", "build=2 startup one_worker=1 caches_mib=64 gpu_frames_mib=64");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -102,10 +246,16 @@ index 00000000..fd5ad141
 +                log::info!("native iPad adapter: {:?}", rs.adapter.get_info());
 +            }
 +            let mut session = effectcraft_host::session();
++            session.prefs.memory.layer_cache_mb = 64;
++            session.prefs.memory.media_cache_mb = 64;
++            session.prefs.memory.preview_cache_mb = 64;
++            session.prefs.previews.cache_frames_when_idle = false;
++            session.prefs.disk.disk_cache_enabled = false;
++            session.prefs_changed();
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Native preview: test touch, timeline and playback. File dialogs and audio are not connected yet.".to_string(),
++                Ok(_) => "Diagnostic build 2: 1 worker, 64 MiB caches. Open Diagnostics for current/previous log.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -115,15 +265,17 @@ index 00000000..fd5ad141
 +            if let Some(rs) = &cc.wgpu_render_state {
 +                let errors = failures.clone();
 +                rs.device.on_uncaptured_error(std::sync::Arc::new(move |error| {
++                    log::error!(target: "effectcraft_diagnostics", "uncaptured_metal_error: {error}");
 +                    errors.report(&format!("Metal error: {error}"), false);
 +                }));
 +                let lost = failures.clone();
 +                rs.device.set_device_lost_callback(move |reason, message| {
++                    log::error!(target: "effectcraft_diagnostics", "metal_device_lost: {reason:?} {message}");
 +                    lost.report(&format!("Metal device lost ({reason:?}): {message}"), true);
 +                });
 +            }
 +            app.set_gpu_failure_bridge(failures);
-+            Ok(Box::new(app))
++            Ok(Box::new(diagnostics::DiagnosticApp { app, directory, startup_error, open: false, previous: false, text: String::new(), last_playing: false }))
 +        }),
 +    )
 +}
@@ -1549,6 +1701,23 @@ index ca8aa865..8ab829df 100644
                      }
                  }
              }
+diff --git a/crates/engine/src/logging.rs b/crates/engine/src/logging.rs
+index 2c89466a..c4f55179 100644
+--- a/crates/engine/src/logging.rs
++++ b/crates/engine/src/logging.rs
+@@ -278,6 +278,12 @@ impl Sink {
+             self.file = None;
+             self.capped = true;
+         }
++        #[cfg(target_os = "ios")]
++        if let Some(file) = self.file.as_ref() {
++            // Diagnostic records must survive an abrupt process termination. A failure to
++            // sync a diagnostic file must never take down the editor.
++            let _ = file.sync_data();
++        }
+     }
+ }
+ 
 diff --git a/crates/media/src/pool.rs b/crates/media/src/pool.rs
 index 98c70710..13b35eb0 100644
 --- a/crates/media/src/pool.rs
@@ -1750,6 +1919,88 @@ index c1503215..be6f1b4f 100644
  fn cache() -> &'static Mutex<HashMap<u64, (u64, Arc<Layout>)>> {
      static C: OnceLock<Mutex<HashMap<u64, (u64, Arc<Layout>)>>> = OnceLock::new();
      C.get_or_init(Default::default)
+diff --git a/crates/ui-egui/src/frames.rs b/crates/ui-egui/src/frames.rs
+index 059bc3a0..1cac59a3 100644
+--- a/crates/ui-egui/src/frames.rs
++++ b/crates/ui-egui/src/frames.rs
+@@ -40,7 +40,7 @@ const MAX_KEEPERS: usize = 64;
+ /// GPU frames kept for RAM preview (bytes of video memory) at first. wgpu can't tell how much
+ /// video memory there is: each time the device runs out, the budget halves (to
+ /// [`MIN_GPU_BUDGET`]) and the frame renders on the CPU (#106).
+-const GPU_BUDGET: usize = 1 << 30;
++const GPU_BUDGET: usize = if cfg!(target_os = "ios") { 64 << 20 } else { 1 << 30 };
+ const MIN_GPU_BUDGET: usize = 64 << 20;
+ 
+ /// A rendered viewer frame: CPU pixels or a GPU texture.
+@@ -460,20 +460,30 @@ pub struct Frames {
+ impl Default for Frames {
+     fn default() -> Self {
+         #[cfg(not(target_arch = "wasm32"))]
+-        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 16);
++        let threads = if cfg!(target_os = "ios") { 1 } else { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 16) };
+         Frames {
+-            cache: Arc::new(Mutex::new(Cache { map: HashMap::new(), order: VecDeque::new(), bytes: 0, gpu_bytes: 0, budget: 3 << 30, gpu_budget: GPU_BUDGET, playhead: None })),
++            cache: Arc::new(Mutex::new(Cache { map: HashMap::new(), order: VecDeque::new(), bytes: 0, gpu_bytes: 0, budget: if cfg!(target_os = "ios") { 64 << 20 } else { 3 << 30 }, gpu_budget: GPU_BUDGET, playhead: None })),
+             inflight: Arc::new(Mutex::new(HashSet::new())),
+             queue: Arc::new(Mutex::new(Queue::default())),
+             #[cfg(not(target_arch = "wasm32"))]
+             // A panicking job would abort the whole process (rayon's default for `spawn`): log it
+             // and lose only that frame (the panic hook has logged the message).
+-            pool: rayon::ThreadPoolBuilder::new()
+-                .num_threads(threads)
+-                .thread_name(|i| format!("ec-frame-{i}"))
+-                .panic_handler(|_| log::error!("a frame render panicked; that frame was skipped"))
+-                .build()
+-                .ok(),
++            pool: {
++                let builder = rayon::ThreadPoolBuilder::new()
++                    .num_threads(threads)
++                    .thread_name(|i| format!("ec-frame-{i}"))
++                    .panic_handler(|_| log::error!("a frame render panicked; that frame was skipped"));
++                // Test stack pressure separately from rendering many frames concurrently.
++                #[cfg(target_os = "ios")]
++                let builder = builder.stack_size(8 << 20);
++                let result = builder.build();
++                #[cfg(target_os = "ios")]
++                match &result {
++                    Ok(pool) => log::info!(target: "effectcraft_diagnostics", "frame_pool workers={} stack_mib=8", pool.current_num_threads()),
++                    Err(error) => log::error!(target: "effectcraft_diagnostics", "frame_pool creation failed, fallback pool active: {error}"),
++                }
++                result.ok()
++            },
+             ctx: None,
+             last_ms: Arc::new(Mutex::new(0.0)),
+             content_keys: Arc::default(),
+@@ -1147,6 +1157,8 @@ impl Worker {
+             job
+         };
+         let t0 = web_time::Instant::now();
++        #[cfg(target_os = "ios")]
++        log::info!(target: "effectcraft_diagnostics", "frame_begin frame={} scale={} urgent={} gpu={}", job.key.frame, job.key.scale, job.urgent, job.src.gpu.is_some());
+         let disk = job.src.disk.as_ref().map(|dc| (dc.clone(), frame_disk_key(content_keys, &job.src.project, &job.key, opts_hash(&job.opts))));
+         let from_disk = disk.as_ref().and_then(|(dc, k)| dc.get_frame(*k));
+         let disk_hit = from_disk.is_some();
+@@ -1157,6 +1169,8 @@ impl Worker {
+                 // Called off (frames it read may be missing) or failed: not cached, and not
+                 // "in progress" forever: the viewer asks for it again.
+                 None => {
++                    #[cfg(target_os = "ios")]
++                    log::warn!(target: "effectcraft_diagnostics", "frame_cancelled_or_failed frame={}", job.key.frame);
+                     self.release(job.key, job.urgent);
+                     return true;
+                 }
+@@ -1165,6 +1179,11 @@ impl Worker {
+         // Publish the shared frame and wake the viewer before optional RGBA conversion
+         // and compression. Persistence still runs on this worker, using the same snapshot.
+         self.finish(&job, ci.clone(), t0);
++        #[cfg(target_os = "ios")]
++        {
++            let stats = self.cache.lock().ok().map(|c| (c.bytes, c.gpu_bytes, c.map.len()));
++            log::info!(target: "effectcraft_diagnostics", "frame_done frame={} ms={:.1} cache_cpu_gpu_count={stats:?}", job.key.frame, t0.elapsed().as_secs_f64() * 1000.0);
++        }
+         if !disk_hit && let (Some((dc, k)), FrameImage::Cpu(img)) = (&disk, &ci) {
+             let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
+             dc.put_frame(*k, img.size[0] as u32, img.size[1] as u32, &rgba);
 diff --git a/crates/ui-egui/src/header.rs b/crates/ui-egui/src/header.rs
 index fb381cfd..9bd1cfb9 100644
 --- a/crates/ui-egui/src/header.rs

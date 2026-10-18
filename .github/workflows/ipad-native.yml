@@ -33,6 +33,11 @@ jobs:
         run: |
           xcodebuild -version
           echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: Check diagnostic journal and IPA packaging
+        run: |
+          rustc +1.95.0 --edition 2024 --test effectcraft/apps/effectcraft-ios/src/journal.rs -o /tmp/ec-journal-tests
+          /tmp/ec-journal-tests
+          python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Compile native ARM64 app
         working-directory: effectcraft
         run: cargo +1.95.0 build --locked --release --target aarch64-apple-ios -p effectcraft-ios

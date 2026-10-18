@@ -1,5 +1,16 @@
 # Validation — 2026-10-18
 
+## Diagnostic build 2
+
+This build investigates an unconfirmed playback-time process termination reported
+on an iPad. It is not a verified crash fix. Standalone journal tests cover missing
+files and bounded tail reading with invalid UTF-8; packaging tests still cover
+the Mach-O platform guard and preview bundle layout (5 tests total).
+The release workflow repeats these tests before compiling the ARM64 iOS app.
+Actual device playback and log persistence across termination require iPad testing.
+
+## Initial preview validation
+
 Passed locally (Linux x86_64, Rust 1.95.0):
 
 - `cargo check --target aarch64-apple-ios -p effectcraft-ios`: all dependencies,
