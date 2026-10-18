@@ -41,6 +41,8 @@ jobs:
         run: |
           rustc +1.95.0 --edition 2024 --test effectcraft/apps/effectcraft-ios/src/journal.rs -o /tmp/ec-journal-tests
           /tmp/ec-journal-tests
+          rustc +1.95.0 --edition 2024 --test effectcraft/apps/effectcraft-ios/src/project_zip.rs -o /tmp/ec-project-zip-tests
+          /tmp/ec-project-zip-tests
           python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Compile native ARM64 app
         working-directory: effectcraft

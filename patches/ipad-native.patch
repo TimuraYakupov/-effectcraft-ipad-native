@@ -1,8 +1,8 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index ce8fe12..f310977 100644
+index ce8fe12..a889d7c 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -1387,6 +1387,19 @@ dependencies = [
+@@ -1387,6 +1387,20 @@ dependencies = [
   "thiserror 2.0.21",
  ]
  
@@ -14,6 +14,7 @@ index ce8fe12..f310977 100644
 + "effectcraft-host",
 + "effectcraft-ui-egui",
 + "eframe",
++ "egui_kittest",
 + "log",
 + "serde_json",
 + "winit",
@@ -22,7 +23,7 @@ index ce8fe12..f310977 100644
  [[package]]
  name = "effectcraft-keyframe"
  version = "0.10.0"
-@@ -1667,6 +1680,7 @@ dependencies = [
+@@ -1667,6 +1681,7 @@ dependencies = [
   "effectcraft-gpu",
   "effectcraft-host",
   "effectcraft-media",
@@ -32,10 +33,10 @@ index ce8fe12..f310977 100644
   "egui",
 diff --git a/apps/effectcraft-ios/Cargo.toml b/apps/effectcraft-ios/Cargo.toml
 new file mode 100644
-index 0000000..4d92526
+index 0000000..b44ad8d
 --- /dev/null
 +++ b/apps/effectcraft-ios/Cargo.toml
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,22 @@
 +[package]
 +name = "effectcraft-ios"
 +description = "Experimental native iPad frontend"
@@ -55,12 +56,15 @@ index 0000000..4d92526
 +serde_json.workspace = true
 +log.workspace = true
 +winit = { version = "0.30", default-features = false }
++
++[dev-dependencies]
++egui_kittest = { workspace = true, features = ["wgpu"] }
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 0000000..da1dfbd
+index 0000000..440062d
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,191 @@
 +//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
 +use std::path::PathBuf;
 +
@@ -69,6 +73,7 @@ index 0000000..da1dfbd
 +
 +pub struct DiagnosticApp {
 +    pub app: EffectcraftApp,
++    pub files: crate::files::Files,
 +    pub directory: PathBuf,
 +    pub startup_error: Option<String>,
 +    pub open: bool,
@@ -124,14 +129,14 @@ index 0000000..da1dfbd
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 4").clicked() {
++                if ui.button("Diagnostics · build 5").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 4").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 5").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.label("One render worker · layer/media caches: 64 MiB each");
 +                ui.horizontal(|ui| {
 +                    ui.label("Preview cache:");
@@ -243,11 +248,466 @@ index 0000000..da1dfbd
 +            });
 +            self.open = open;
 +        }
++        self.files.show(&mut self.app, ctx);
 +    }
 +
 +    fn on_exit(&mut self) {
 +        log::info!(target: "effectcraft_diagnostics", "clean_exit");
 +        self.app.on_exit();
++    }
++}
+diff --git a/apps/effectcraft-ios/src/files.rs b/apps/effectcraft-ios/src/files.rs
+new file mode 100644
+index 0000000..cfc30da
+--- /dev/null
++++ b/apps/effectcraft-ios/src/files.rs
+@@ -0,0 +1,448 @@
++//! App-local file dialogs, shared with Files through UIFileSharingEnabled.
++use std::collections::BTreeSet;
++use std::path::{Component, Path, PathBuf};
++use std::sync::mpsc::{self, Receiver};
++use std::sync::{
++    Arc,
++    atomic::{AtomicBool, Ordering},
++};
++
++use effectcraft_ui_egui::{DialogDone, EffectcraftApp, FileDialog};
++use eframe::egui;
++
++struct Request {
++    kind: FileDialog,
++    done: DialogDone,
++}
++struct Entry {
++    path: PathBuf,
++    folder: bool,
++}
++
++pub struct Files {
++    root: PathBuf,
++    dir: PathBuf,
++    inbox: Receiver<Request>,
++    active: Option<Request>,
++    entries: Vec<Entry>,
++    selected: BTreeSet<PathBuf>,
++    name: String,
++    error: String,
++    replace: Option<PathBuf>,
++    unpacking: Option<Receiver<Result<PathBuf, String>>>,
++    location: String,
++    cancel: Option<Arc<AtomicBool>>,
++}
++
++fn documents_folder(home: &Path) -> (PathBuf, String) {
++    // LiveContainer's guest HOME is inside its shared Documents/Data/Application/<id>.
++    // Put user projects beside Data, where Files can reach them without opening UUID folders.
++    let text = home.to_string_lossy();
++    if let Some((host, _)) = text.split_once("/Documents/Data/Application/") {
++        return (Path::new(host).join("Documents/EffectCraft"), "Files / On My iPad / LiveContainer / EffectCraft".into());
++    }
++    (home.join("Documents"), "Files / On My iPad / EC Native Preview".into())
++}
++
++pub fn save_path(root: &Path, dir: &Path, name: &str, ext: &str) -> Result<PathBuf, String> {
++    let dir = dir.canonicalize().map_err(|e| e.to_string())?;
++    let root = root.canonicalize().map_err(|e| e.to_string())?;
++    if !dir.starts_with(root) {
++        return Err("Choose a folder inside EffectCraft Documents".into());
++    }
++    let name = name.trim();
++    if name.is_empty()
++        || name.len() > 200
++        || name.starts_with('.')
++        || name.contains(['/', '\\', '\0'])
++        || Path::new(name).components().count() != 1
++        || !matches!(Path::new(name).components().next(), Some(Component::Normal(_)))
++    {
++        return Err("Enter a filename without folders (up to 200 bytes)".into());
++    }
++    let mut result = dir.join(name);
++    if result.extension().is_none() && !ext.is_empty() {
++        result.set_extension(ext);
++    }
++    if std::fs::symlink_metadata(&result).is_ok_and(|m| m.file_type().is_symlink() || m.is_dir()) {
++        return Err("Choose a regular file name".into());
++    }
++    Ok(result)
++}
++
++impl Files {
++    pub fn install(app: &mut EffectcraftApp, ctx: &egui::Context) -> Self {
++        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
++        let (root, location) = documents_folder(&home);
++        let error = std::fs::create_dir_all(&root).err().map(|e| e.to_string()).unwrap_or_default();
++        let root = root.canonicalize().unwrap_or(root);
++        let (send, inbox) = mpsc::sync_channel::<Request>(8);
++        let wake = ctx.clone();
++        app.hooks.file_dialog_async = Some(Box::new(move |kind, done| {
++            if let Err(e) = send.try_send(Request { kind, done }) {
++                let request = match e {
++                    mpsc::TrySendError::Full(request) | mpsc::TrySendError::Disconnected(request) => request,
++                };
++                (request.done)(vec![]);
++                log::warn!("File dialog queue unavailable");
++            }
++            wake.request_repaint();
++        }));
++        Self {
++            dir: root.clone(),
++            root,
++            inbox,
++            active: None,
++            entries: vec![],
++            selected: BTreeSet::new(),
++            name: String::new(),
++            error,
++            replace: None,
++            unpacking: None,
++            location,
++            cancel: None,
++        }
++    }
++
++    fn refresh(&mut self) {
++        self.entries.clear();
++        self.selected.clear();
++        self.replace = None;
++        let listing = match std::fs::read_dir(&self.dir) {
++            Ok(v) => v,
++            Err(e) => {
++                self.error = e.to_string();
++                return;
++            }
++        };
++        let Some(request) = &self.active else { return };
++        for entry in listing.take(4096) {
++            let Ok(entry) = entry else { continue };
++            let Ok(kind) = entry.file_type() else { continue };
++            if kind.is_symlink() || entry.file_name().to_string_lossy().starts_with('.') {
++                continue;
++            }
++            let path = entry.path();
++            let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
++            let visible = kind.is_dir()
++                || match &request.kind {
++                    FileDialog::Folder => false,
++                    FileDialog::OpenProject => matches!(ext.as_str(), "ecproj" | "ecprojx" | "xml" | "zip"),
++                    FileDialog::Open { exts, .. } => exts.is_empty() || exts.iter().any(|e| e.eq_ignore_ascii_case(&ext)),
++                    FileDialog::Save { .. } => true,
++                };
++            if visible && (kind.is_dir() || kind.is_file()) {
++                self.entries.push(Entry { path, folder: kind.is_dir() });
++            }
++        }
++        self.entries.sort_by(|a, b| b.folder.cmp(&a.folder).then_with(|| a.path.cmp(&b.path)));
++    }
++
++    fn finish(&mut self, paths: Vec<String>) {
++        if let Some(cancel) = self.cancel.take() {
++            cancel.store(true, Ordering::Relaxed);
++        }
++        self.unpacking = None;
++        if let Some(request) = self.active.take() {
++            (request.done)(paths);
++        }
++    }
++
++    fn choose(&mut self, ctx: &egui::Context) {
++        let Some(request) = &self.active else { return };
++        let paths = match &request.kind {
++            FileDialog::Folder => vec![self.dir.clone()],
++            FileDialog::Save { ext, .. } => match save_path(&self.root, &self.dir, &self.name, ext) {
++                Ok(path) => {
++                    if path.exists() && self.replace.as_ref() != Some(&path) {
++                        self.replace = Some(path);
++                        return;
++                    }
++                    vec![path]
++                }
++                Err(error) => {
++                    self.error = error;
++                    return;
++                }
++            },
++            _ => self.selected.iter().cloned().collect(),
++        };
++        if paths.is_empty() {
++            self.error = "Select a file first".into();
++            return;
++        }
++        if matches!(request.kind, FileDialog::OpenProject)
++            && let Some(path) = paths.first()
++        {
++            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip")) {
++                let archive = path.clone();
++                let docs = self.root.clone();
++                let (send, receive) = mpsc::channel();
++                let wake = ctx.clone();
++                let cancel = Arc::new(AtomicBool::new(false));
++                self.cancel = Some(cancel.clone());
++                match std::thread::Builder::new().name("ec-project-import".into()).stack_size(8 << 20).spawn(move || {
++                    let result = crate::project_zip::import(&archive, &docs, &cancel);
++                    let _ = send.send(result);
++                    wake.request_repaint();
++                }) {
++                    Ok(_) => self.unpacking = Some(receive),
++                    Err(e) => self.error = e.to_string(),
++                }
++                return;
++            }
++            if std::fs::metadata(path).is_ok_and(|m| m.len() > 32 << 20) {
++                self.error = "Project file exceeds 32 MiB".into();
++                return;
++            }
++        }
++        self.finish(paths.iter().map(|p| p.to_string_lossy().into_owned()).collect());
++    }
++
++    pub fn show(&mut self, app: &mut EffectcraftApp, ctx: &egui::Context) {
++        if self.active.is_none()
++            && let Ok(request) = self.inbox.try_recv()
++        {
++            app.stop();
++            self.name = match &request.kind {
++                FileDialog::Save { default, .. } => {
++                    Path::new(default).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Project.ecproj".into())
++                }
++                _ => String::new(),
++            };
++            self.active = Some(request);
++            self.error.clear();
++            self.refresh();
++        }
++        if let Some(receiver) = &self.unpacking {
++            match receiver.try_recv() {
++                Ok(Ok(path)) => {
++                    self.finish(vec![path.to_string_lossy().into_owned()]);
++                    return;
++                }
++                Ok(Err(error)) => {
++                    self.unpacking = None;
++                    self.error = error;
++                }
++                Err(mpsc::TryRecvError::Disconnected) => {
++                    self.unpacking = None;
++                    self.error = "Project import stopped unexpectedly".into();
++                }
++                Err(mpsc::TryRecvError::Empty) => {
++                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
++                }
++            }
++        }
++        let Some(request) = &self.active else { return };
++        let save = matches!(request.kind, FileDialog::Save { .. });
++        let many = matches!(request.kind, FileDialog::Open { many: true, .. });
++        let folder = matches!(request.kind, FileDialog::Folder);
++        let busy = self.unpacking.is_some();
++        let mut navigate = None;
++        let mut choose = false;
++        let mut cancel = false;
++        egui::Modal::new(egui::Id::new("ipad-file-picker")).show(ctx, |ui| {
++            ui.spacing_mut().interact_size.y = 40.0;
++            ui.spacing_mut().button_padding = egui::vec2(10.0, 8.0);
++            ui.spacing_mut().item_spacing.y = 7.0;
++            ui.style_mut().override_font_id = Some(egui::FontId::proportional(16.0));
++            ui.set_width(560.0_f32.min(ctx.content_rect().width() - 48.0).max(200.0));
++            ui.heading(if save {
++                "Save file"
++            } else if folder {
++                "Choose folder"
++            } else {
++                "Open file"
++            });
++            ui.label(&self.location);
++            ui.label("Copy projects and media to this folder in Files, then tap Refresh.");
++            ui.label("For Bridge ZIP: select the archive. Compressed ZIPs can be unpacked in Files first.");
++            ui.horizontal(|ui| {
++                if ui.add_enabled(!busy, egui::Button::new("Documents")).clicked() {
++                    navigate = Some(self.root.clone());
++                }
++                if ui.add_enabled(!busy && self.dir != self.root, egui::Button::new("Up")).clicked() {
++                    navigate = self.dir.parent().map(Path::to_path_buf);
++                }
++                if ui.add_enabled(!busy, egui::Button::new("Refresh")).clicked() {
++                    navigate = Some(self.dir.clone());
++                }
++            });
++            ui.label(self.dir.strip_prefix(&self.root).unwrap_or(&self.dir).to_string_lossy());
++            ui.add_enabled_ui(!busy, |ui| {
++                egui::ScrollArea::vertical().max_height((ctx.content_rect().height() * 0.35).min(320.0)).show(ui, |ui| {
++                    for entry in &self.entries {
++                        let name = entry.path.file_name().map(|s| s.to_string_lossy()).unwrap_or_default();
++                        let label = if entry.folder { format!("Folder: {name}") } else { name.into_owned() };
++                        if ui.selectable_label(self.selected.contains(&entry.path), label).clicked() {
++                            if entry.folder {
++                                navigate = Some(entry.path.clone());
++                            } else if save {
++                                self.name = entry.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
++                                self.replace = None;
++                            } else if many {
++                                if !self.selected.remove(&entry.path) {
++                                    self.selected.insert(entry.path.clone());
++                                }
++                            } else {
++                                self.selected.clear();
++                                self.selected.insert(entry.path.clone());
++                            }
++                        }
++                    }
++                    if self.entries.is_empty() {
++                        ui.label("No matching files. Copy files here in the Files app, then tap Refresh.");
++                    }
++                });
++                if save && ui.add(egui::TextEdit::singleline(&mut self.name).id_salt("ipad-save-name").hint_text("Filename")).changed() {
++                    self.replace = None;
++                }
++            });
++            if busy {
++                ui.label("Unpacking project and media…");
++                ui.spinner();
++            }
++            if !self.error.is_empty() {
++                ui.colored_label(egui::Color32::YELLOW, &self.error);
++            }
++            if self.replace.is_some() {
++                ui.colored_label(egui::Color32::YELLOW, "This file exists. Replace it?");
++            }
++            ui.horizontal(|ui| {
++                if ui
++                    .add_enabled(
++                        !busy,
++                        egui::Button::new(if self.replace.is_some() {
++                            "Replace existing file"
++                        } else if save {
++                            "Save"
++                        } else if folder {
++                            "Choose folder"
++                        } else {
++                            "Open"
++                        }),
++                    )
++                    .clicked()
++                {
++                    choose = true;
++                }
++                if ui.button("Cancel").clicked() {
++                    cancel = true;
++                }
++            });
++        });
++        if cancel {
++            self.finish(vec![]);
++        } else if let Some(path) = navigate {
++            match path.canonicalize() {
++                Ok(path) if path.starts_with(&self.root) => {
++                    self.dir = path;
++                    self.error.clear();
++                    self.refresh();
++                }
++                _ => self.error = "Folder is unavailable or outside Documents".into(),
++            }
++        } else if choose {
++            self.choose(ctx);
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn livecontainer_uses_the_shared_effectcraft_folder() {
++        let (folder, hint) = documents_folder(Path::new("/private/var/mobile/Containers/Data/Application/HOST/Documents/Data/Application/GUEST"));
++        assert_eq!(folder, PathBuf::from("/private/var/mobile/Containers/Data/Application/HOST/Documents/EffectCraft"));
++        assert!(hint.contains("LiveContainer"));
++        assert_eq!(documents_folder(Path::new("/app/home")).0, PathBuf::from("/app/home/Documents"));
++    }
++
++    #[test]
++    fn picker_renders_and_cancel_finishes_the_async_request() {
++        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
++        let root = std::env::temp_dir().join(format!("ec-picker-ui-{}", std::process::id()));
++        std::fs::create_dir_all(&root).unwrap();
++        let (send, inbox) = mpsc::channel();
++        let (answer, received) = mpsc::channel();
++        send.send(Request {
++            kind: FileDialog::OpenProject,
++            done: Box::new(move |paths| {
++                answer.send(paths).unwrap();
++            }),
++        })
++        .unwrap();
++        let mut picker = Files {
++            root: root.clone(),
++            dir: root.clone(),
++            inbox,
++            active: None,
++            entries: vec![],
++            selected: BTreeSet::new(),
++            name: String::new(),
++            error: String::new(),
++            replace: None,
++            unpacking: None,
++            location: "Files / On My iPad / LiveContainer / EffectCraft".into(),
++            cancel: None,
++        };
++        {
++            use egui_kittest::kittest::Queryable;
++            let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1024.0, 768.0)).build_ui(|ui| {
++                if !ui.visuals().dark_mode {
++                    ui.ctx().set_visuals(egui::Visuals::dark());
++                }
++                picker.show(&mut app, ui.ctx());
++            });
++            harness.run();
++            if let Ok(path) = std::env::var("EC_FILE_PICKER_SNAPSHOT") {
++                harness.render().unwrap().save(path).unwrap();
++            }
++            harness.get_by_label("Cancel").click();
++            harness.run();
++        }
++        assert!(received.recv().unwrap().is_empty());
++        assert!(picker.active.is_none());
++        let _ = std::fs::remove_dir_all(root);
++    }
++
++    #[test]
++    fn project_save_reopen_and_failed_open_preserve_the_document() {
++        use serde_json::json;
++        let root = std::env::temp_dir().join(format!("ec-native-save-{}", std::process::id()));
++        std::fs::create_dir_all(&root).unwrap();
++        let project = root.join("My Project.ecproj");
++        let mut session = effectcraft_engine::Session::default();
++        session.execute("comp.new", json!({"name":"My comp", "width":64,"height":64,"duration":1})).unwrap();
++        session.execute("file.saveAs", json!({"path":project})).unwrap();
++        assert!(!session.is_dirty());
++        let saved = std::fs::read(&project).unwrap();
++        let mut reopened = effectcraft_engine::Session::default();
++        reopened.execute("file.open", json!({"path":project})).unwrap();
++        assert_eq!(reopened.project.items.len(), session.project.items.len());
++        let before = reopened.project.clone();
++        let bad = root.join("bad.ecproj");
++        std::fs::write(&bad, b"not JSON").unwrap();
++        assert!(reopened.execute("file.open", json!({"path":bad})).is_err());
++        assert!(std::sync::Arc::ptr_eq(&before, &reopened.project));
++        let block = root.join("blocked");
++        std::fs::write(&block, b"not a folder").unwrap();
++        assert!(reopened.execute("file.saveAs", json!({"path":block.join("bad.ecproj")})).is_err());
++        assert_eq!(std::fs::read(&project).unwrap(), saved);
++        assert_eq!(reopened.path.as_deref(), project.to_str());
++        let _ = std::fs::remove_dir_all(root);
++    }
++    #[test]
++    fn save_names_stay_in_documents() {
++        let root = std::env::temp_dir().join(format!("ec-save-names-{}", std::process::id()));
++        std::fs::create_dir_all(&root).unwrap();
++        assert_eq!(save_path(&root, &root, "My Project", "ecproj").unwrap(), root.canonicalize().unwrap().join("My Project.ecproj"));
++        for bad in ["../bad", "/bad", "a/b", "a\\b", "", ".hidden"] {
++            assert!(save_path(&root, &root, bad, "ecproj").is_err());
++        }
++        assert!(save_path(&root, &std::env::temp_dir(), "bad", "ecproj").is_err());
++        let _ = std::fs::remove_dir_all(root);
 +    }
 +}
 diff --git a/apps/effectcraft-ios/src/journal.rs b/apps/effectcraft-ios/src/journal.rs
@@ -299,10 +759,10 @@ index 0000000..536a1b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 0000000..e3150f2
+index 0000000..0178cad
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,93 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
 +//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -310,14 +770,16 @@ index 0000000..e3150f2
 +use effectcraft_ui_egui::EffectcraftApp;
 +use serde_json::json;
 +mod diagnostics;
++mod files;
 +mod journal;
++mod project_zip;
 +
 +fn main() -> eframe::Result {
 +    effectcraft_engine::logging::install();
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=4 startup workers=1 preview_mib=256 disk_gib=1 idle_cache=true");
++    log::info!(target: "effectcraft_diagnostics", "build=5 startup workers=1 preview_mib=256 disk_gib=1 project_files=true");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -360,7 +822,7 @@ index 0000000..e3150f2
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 4: 256 MiB RAM + 1 GiB disk cache. Blue = disk, green = RAM. Controls in Diagnostics.".to_string(),
++                Ok(_) => "Build 5: File > Open / Save As. Copy projects into this app's Documents folder in Files.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -380,9 +842,236 @@ index 0000000..e3150f2
 +                });
 +            }
 +            app.set_gpu_failure_bridge(failures);
-+            Ok(Box::new(diagnostics::DiagnosticApp { app, directory, startup_error, open: false, previous: false, text: String::new(), last_playing: false }))
++            let files = files::Files::install(&mut app, &cc.egui_ctx);
++            Ok(Box::new(diagnostics::DiagnosticApp {
++                app,
++                files,
++                directory,
++                startup_error,
++                open: false,
++                previous: false,
++                text: String::new(),
++                last_playing: false,
++            }))
 +        }),
 +    )
++}
+diff --git a/apps/effectcraft-ios/src/project_zip.rs b/apps/effectcraft-ios/src/project_zip.rs
+new file mode 100644
+index 0000000..03464fe
+--- /dev/null
++++ b/apps/effectcraft-ios/src/project_zip.rs
+@@ -0,0 +1,211 @@
++//! Streaming reader for stored Bridge ZIPs (PKWARE APPNOTE 6.3 local headers).
++//! No archive-sized buffer, no external paths, no overwriting existing projects.
++use std::collections::HashSet;
++use std::io::{Read, Write};
++use std::path::{Component, Path, PathBuf};
++use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
++
++static NEXT: AtomicU64 = AtomicU64::new(0);
++const MAX_TOTAL: u64 = 512 << 20;
++
++pub fn relative_name(name: &str) -> Result<PathBuf, String> {
++    let name = name.replace('\\', "/");
++    let path = Path::new(&name);
++    if name.is_empty()
++        || name.len() > 1024
++        || name.contains(':')
++        || name.contains('\0')
++        || name.split('/').any(|s| s == ".." || s == ".")
++        || path.components().any(|c| !matches!(c, Component::Normal(_)))
++    {
++        return Err("ZIP contains an invalid or external file path".into());
++    }
++    Ok(path.into())
++}
++
++pub fn import(archive: &Path, documents: &Path, cancel: &AtomicBool) -> Result<PathBuf, String> {
++    let root = documents.join("Projects");
++    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
++    let root = root.canonicalize().map_err(|e| e.to_string())?;
++    let docs = documents.canonicalize().map_err(|e| e.to_string())?;
++    if !root.starts_with(&docs) {
++        return Err("Projects folder points outside Documents".into());
++    }
++    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
++    let id = NEXT.fetch_add(1, Ordering::Relaxed);
++    let staging = root.join(format!(".import-{stamp}-{id}"));
++    std::fs::create_dir(&staging).map_err(|e| e.to_string())?;
++    let result = extract(archive, &staging, cancel).and_then(|name| {
++        if cancel.load(Ordering::Relaxed) {
++            return Err("Import cancelled".into());
++        }
++        let final_dir = root.join(format!("Imported-{stamp}-{id}"));
++        std::fs::rename(&staging, &final_dir).map_err(|e| e.to_string())?;
++        Ok(final_dir.join(name))
++    });
++    if result.is_err() {
++        let _ = std::fs::remove_dir_all(&staging);
++    }
++    result
++}
++
++fn number16(b: &[u8], at: usize) -> Result<u16, String> {
++    let bytes = b.get(at..at.saturating_add(2)).ok_or("Truncated ZIP header")?;
++    Ok(u16::from_le_bytes(bytes.try_into().map_err(|_| "Invalid ZIP header")?))
++}
++fn number32(b: &[u8], at: usize) -> Result<u32, String> {
++    let bytes = b.get(at..at.saturating_add(4)).ok_or("Truncated ZIP header")?;
++    Ok(u32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid ZIP header")?))
++}
++
++fn extract(archive: &Path, dest: &Path, cancel: &AtomicBool) -> Result<PathBuf, String> {
++    let mut file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
++    if file.metadata().map_err(|e| e.to_string())?.len() > (1 << 30) {
++        return Err("ZIP is larger than 1 GiB".into());
++    }
++    let mut names = HashSet::new();
++    let mut project = None;
++    let mut total = 0_u64;
++    let mut table = [0_u32; 256];
++    for (i, slot) in table.iter_mut().enumerate() {
++        let mut c = i as u32;
++        for _ in 0..8 {
++            c = if c & 1 == 1 { (c >> 1) ^ 0xedb88320 } else { c >> 1 };
++        }
++        *slot = c;
++    }
++    loop {
++        if cancel.load(Ordering::Relaxed) {
++            return Err("Import cancelled".into());
++        }
++        let mut signature = [0; 4];
++        file.read_exact(&mut signature).map_err(|e| format!("Truncated ZIP: {e}"))?;
++        let sig = u32::from_le_bytes(signature);
++        if sig == 0x02014b50 || sig == 0x06054b50 {
++            break;
++        }
++        if sig != 0x04034b50 || names.len() >= 4096 {
++            return Err("Invalid ZIP or too many entries".into());
++        }
++        let mut h = [0; 26];
++        file.read_exact(&mut h).map_err(|e| e.to_string())?;
++        if number16(&h, 2)? & 9 != 0 || number16(&h, 4)? != 0 {
++            return Err("This ZIP is compressed or encrypted. Unzip it in Files, then open its .ecproj.".into());
++        }
++        let crc = number32(&h, 10)?;
++        let size = number32(&h, 14)? as u64;
++        if size != number32(&h, 18)? as u64 {
++            return Err("Invalid stored ZIP size".into());
++        }
++        total = total.checked_add(size).filter(|n| *n <= MAX_TOTAL).ok_or("Unpacked ZIP exceeds 512 MiB")?;
++        let name_len = number16(&h, 22)? as usize;
++        if name_len == 0 || name_len > 1024 {
++            return Err("Invalid ZIP filename".into());
++        }
++        let mut name = vec![0; name_len];
++        file.read_exact(&mut name).map_err(|e| e.to_string())?;
++        let name = String::from_utf8(name).map_err(|_| "ZIP filenames must use UTF-8")?;
++        let relative = relative_name(&name)?;
++        if !names.insert(relative.clone()) {
++            return Err("ZIP contains duplicate file paths".into());
++        }
++        let mut extra = vec![0; number16(&h, 24)? as usize];
++        file.read_exact(&mut extra).map_err(|e| e.to_string())?;
++        let target = dest.join(&relative);
++        if name.ends_with('/') {
++            if size != 0 {
++                return Err("Invalid ZIP folder entry".into());
++            }
++            std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
++            continue;
++        }
++        if relative.components().count() == 1 && relative.extension().is_some_and(|e| e.eq_ignore_ascii_case("ecproj")) {
++            if project.is_some() || size > 32 << 20 {
++                return Err("ZIP must contain exactly one root .ecproj, at most 32 MiB".into());
++            }
++            project = Some(relative.clone());
++        }
++        if let Some(parent) = target.parent() {
++            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
++        }
++        let mut out = std::fs::File::options().write(true).create_new(true).open(&target).map_err(|e| e.to_string())?;
++        let mut left = size;
++        let mut check = u32::MAX;
++        let mut buffer = [0; 65536];
++        while left > 0 {
++            if cancel.load(Ordering::Relaxed) {
++                return Err("Import cancelled".into());
++            }
++            let count = left.min(buffer.len() as u64) as usize;
++            let chunk = buffer.get_mut(..count).ok_or("Invalid ZIP read size")?;
++            file.read_exact(chunk).map_err(|e| e.to_string())?;
++            for byte in chunk.iter() {
++                let index = ((check ^ u32::from(*byte)) & 255) as usize;
++                check = (check >> 8) ^ table.get(index).copied().ok_or("Invalid CRC index")?;
++            }
++            out.write_all(chunk).map_err(|e| e.to_string())?;
++            left -= count as u64;
++        }
++        if !check != crc {
++            return Err(format!("ZIP checksum failed: {name}"));
++        }
++    }
++    project.ok_or_else(|| "ZIP must contain exactly one .ecproj at its root".into())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn fixture(name: &str, entries: &str, corrupt: bool) -> (PathBuf, PathBuf) {
++        let root = std::env::temp_dir().join(format!("ec-native-zip-{name}-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        std::fs::create_dir_all(&root).unwrap();
++        let archive = root.join("input.zip");
++        let script = "import zipfile,sys,json\np=sys.argv[1]\nwith zipfile.ZipFile(p,'w',zipfile.ZIP_STORED) as z:\n for n,d in json.loads(sys.argv[2]):z.writestr(n,d)\nif sys.argv[3]=='true':\n b=bytearray(open(p,'rb').read());b[30+len('Project.ecproj')+1]^=1;open(p,'wb').write(b)\n";
++        assert!(
++            std::process::Command::new("python3")
++                .args(["-c", script, archive.to_str().unwrap(), entries, if corrupt { "true" } else { "false" }])
++                .status()
++                .unwrap()
++                .success()
++        );
++        (root, archive)
++    }
++
++    #[test]
++    fn extracts_project_and_media_without_overwriting_previous_imports() {
++        let (root, zip) = fixture("roundtrip", r#"[["Project.ecproj","{\"schema\":1}"],["media/test.txt","pixels"]]"#, false);
++        let project = import(&zip, &root, &AtomicBool::new(false)).unwrap();
++        assert_eq!(std::fs::read_to_string(&project).unwrap(), "{\"schema\":1}");
++        assert_eq!(std::fs::read_to_string(project.parent().unwrap().join("media/test.txt")).unwrap(), "pixels");
++        let second = import(&zip, &root, &AtomicBool::new(false)).unwrap();
++        assert_ne!(project, second);
++        assert!(project.exists());
++        let count = std::fs::read_dir(root.join("Projects")).unwrap().count();
++        assert!(import(&zip, &root, &AtomicBool::new(true)).is_err());
++        assert_eq!(std::fs::read_dir(root.join("Projects")).unwrap().count(), count);
++        let _ = std::fs::remove_dir_all(root);
++    }
++
++    #[test]
++    fn rejects_traversal_bad_crc_and_multiple_projects_without_partial_imports() {
++        for (name, entries, corrupt) in [
++            ("traversal", r#"[["../escape.ecproj","{}"]]"#, false),
++            ("checksum", r#"[["Project.ecproj","{\"schema\":1}"]]"#, true),
++            ("multiple", r#"[["A.ecproj","{}"],["B.ecproj","{}"]]"#, false),
++        ] {
++            let (root, zip) = fixture(name, entries, corrupt);
++            assert!(import(&zip, &root, &AtomicBool::new(false)).is_err(), "{name}");
++            assert_eq!(std::fs::read_dir(root.join("Projects")).unwrap().count(), 0);
++            let _ = std::fs::remove_dir_all(root);
++        }
++    }
++    #[test]
++    fn rejects_external_and_traversal_paths() {
++        for bad in ["../x", "/x", "C:/x", "media/../../x", "media\\..\\x", "./x", ""] {
++            assert!(relative_name(bad).is_err(), "{bad}");
++        }
++        assert_eq!(relative_name("media/a.png").unwrap(), PathBuf::from("media/a.png"));
++    }
 +}
 diff --git a/apps/effectcraft-web/Cargo.toml b/apps/effectcraft-web/Cargo.toml
 index 6c30f9a..ef49f78 100644

@@ -1,5 +1,31 @@
 # EffectCraft native iPad preview
 
+## Preview build 5: personal project files
+
+File > Open, Save and Save As now use a non-blocking in-app file browser.
+File > Import uses the same browser, including multiple media selection. Project
+replacement keeps the engine's unsaved-changes guard; Save As asks before replacing
+an existing file, and saves use the engine's atomic file writer.
+
+On LiveContainer, launch once to create **Files > On My iPad > LiveContainer >
+EffectCraft**, then copy projects/media there. Open the app's File > Open dialog,
+tap Refresh, select a file and tap Open. Standalone installations use the app's
+Documents folder. This is an app-local browser, not the UIKit/iCloud file picker.
+The shared LiveContainer path still needs physical-device verification.
+
+Supported: native `.ecproj`, XML copies `.ecprojx`/`.xml`, and stored (uncompressed)
+Bridge ZIPs with exactly one `.ecproj` at their root. ZIP media are streamed into
+a unique Projects/Imported-* folder beside the project; existing imports are
+never overwritten. ZIP CRCs, paths, sizes, entry count and cancellation are checked.
+For a compressed ZIP, unpack it in Files first, then open its `.ecproj` together
+with the original relative media folder. Limits: 32 MiB project JSON, 4096 archive
+entries, 512 MiB unpacked bytes, 1 GiB archive size. No archive-sized RAM buffer.
+Keep the Imported folder's media when moving/saving projects; saving `.ecproj`
+alone does not collect media into a portable ZIP.
+
+The output is `EffectCraft-Native-Preview-5.ipa`, bundle build number 5, with the
+same native preview identity. Build 4's 256 MiB RAM / 1 GiB disk defaults remain.
+
 ## Preview build 4: disk-backed previews
 
 The user confirmed smooth cached playback at 256 MiB in build 3; Quarter fit the
@@ -68,17 +94,18 @@ Experimental native Rust/egui frontend using Metal, based on EffectCraft 0.10.0
 editing/font and still-image-cache fixes. Upstream source is fetched at that exact commit;
 `patches/ipad-native.patch` contains the changes. No personal media or projects are included.
 
-This is a graphics/touch smoke prototype, not a replacement for the stable iPad app.
+This is an experimental native frontend, not a replacement for the stable iPad app.
 It starts with EffectCraft's synthetic demo. Test launch, panel/timeline interaction,
-playback and Metal rendering. Native document pickers, AE ZIP bridge, custom-font
-installation and audio output are not yet connected in this frontend.
+playback and Metal rendering. App-local files and stored Bridge ZIP import are
+connected in build 5. UIKit document pickers, custom-font installation, portable
+Bridge ZIP export and audio output are not yet connected in this frontend.
 
 ## Build
 
 Push this build repository to GitHub. The first push starts the build automatically;
 later builds can also be started with **Actions → Native iPad preview → Run workflow**.
 The standard `macos-15` runner builds an unsigned ARM64 iOS executable and packages
-`EffectCraft-Native-Preview-4.ipa` as an Actions artifact. No Apple signing key is needed
+`EffectCraft-Native-Preview-5.ipa` as an Actions artifact. No Apple signing key is needed
 for this unsigned output. Previous builds launched in LiveContainer on the test iPad.
 The preview uses `com.effectcraft.ipad.nativepreview`, separate from the stable app.
 
