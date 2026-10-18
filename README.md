@@ -1,5 +1,26 @@
 # EffectCraft native iPad preview
 
+## Preview build 6: system Files folders and 1 GiB RAM
+
+File > Open / Save As > **Other locations (Files)** opens the iPadOS folder
+picker. Choose an accessible folder in On My iPad, iCloud Drive or another Files
+provider, then select the project or enter its filename in the app browser.
+The selected folder is kept accessible for this launch. Reselect it after relaunch;
+persistent bookmarks are not stored yet. Projects retain relative media paths.
+ZIPs are extracted to the local EffectCraft Projects folder.
+
+External project reads and atomic replacements use NSFileCoordinator while the
+folder's security-scoped URL is retained. A small UIKit Objective-C module in
+`platform/EffectCraftDocuments.m` is linked by the wrapper; the editor's Rust
+code uses bounded file-based requests and contains no unsafe FFI. Actual picker
+presentation and provider behavior in LiveContainer require device testing.
+
+RAM preview caching now defaults to **1024 MiB**, with 256/512/1024 MiB controls
+in Diagnostics. Disk caching still defaults to 1 GiB. One render worker and
+64 MiB layer/media caches remain. Total process memory exceeds the viewer-cache
+limit; the larger limit needs testing on the iPad. The output is
+`EffectCraft-Native-Preview-6.ipa`, bundle build number 6, same preview identity.
+
 ## Preview build 5: personal project files
 
 File > Open, Save and Save As now use a non-blocking in-app file browser.
@@ -97,15 +118,15 @@ editing/font and still-image-cache fixes. Upstream source is fetched at that exa
 This is an experimental native frontend, not a replacement for the stable iPad app.
 It starts with EffectCraft's synthetic demo. Test launch, panel/timeline interaction,
 playback and Metal rendering. App-local files and stored Bridge ZIP import are
-connected in build 5. UIKit document pickers, custom-font installation, portable
-Bridge ZIP export and audio output are not yet connected in this frontend.
+connected in build 5; build 6 adds the UIKit folder picker. Custom-font installation,
+portable Bridge ZIP export and audio output are not yet connected in this frontend.
 
 ## Build
 
 Push this build repository to GitHub. The first push starts the build automatically;
 later builds can also be started with **Actions → Native iPad preview → Run workflow**.
 The standard `macos-15` runner builds an unsigned ARM64 iOS executable and packages
-`EffectCraft-Native-Preview-5.ipa` as an Actions artifact. No Apple signing key is needed
+`EffectCraft-Native-Preview-6.ipa` as an Actions artifact. No Apple signing key is needed
 for this unsigned output. Previous builds launched in LiveContainer on the test iPad.
 The preview uses `com.effectcraft.ipad.nativepreview`, separate from the stable app.
 

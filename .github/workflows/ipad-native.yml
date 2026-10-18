@@ -44,9 +44,12 @@ jobs:
           rustc +1.95.0 --edition 2024 --test effectcraft/apps/effectcraft-ios/src/project_zip.rs -o /tmp/ec-project-zip-tests
           /tmp/ec-project-zip-tests
           python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Compile iPad Files platform module
+        run: |
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -fobjc-arc -fmodules -Wall -Wextra -c platform/EffectCraftDocuments.m -o /tmp/effectcraft-documents.o
       - name: Compile native ARM64 app
         working-directory: effectcraft
-        run: cargo +1.95.0 build --locked --release --target aarch64-apple-ios -p effectcraft-ios
+        run: cargo +1.95.0 rustc --locked --release --target aarch64-apple-ios -p effectcraft-ios -- -C link-arg=/tmp/effectcraft-documents.o -C link-arg=-framework -C link-arg=UIKit -C link-arg=-framework -C link-arg=Foundation -C link-arg=-framework -C link-arg=UniformTypeIdentifiers
       - name: Package unsigned IPA
         run: python3 scripts/package_ipa.py
       - name: Upload IPA and build details

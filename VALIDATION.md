@@ -1,5 +1,20 @@
 # Validation — 2026-10-18
 
+## Preview build 6
+
+The user confirmed project open/save in build 5. Build 6 adds the system folder
+picker, retained security-scoped folder access and coordinated project read/write.
+RAM preview default/maximum is 1024 MiB, with 256/512/1024 controls. Disk default
+remains 1 GiB. Permissions are session-only; files must be reselected after relaunch.
+
+Passed locally: locked ARM64 iOS cargo check; 12 native frontend tests including
+folder grant boundaries, protocol failures/cancellation and local atomic save/read;
+3 packaging tests; changed Rust formatting; dependency layering; asset attribution
+(39 assets). The browser was rendered at 1024x768 and inspected. The UIKit module
+requires macOS SDK compilation in Actions, followed by real iPad testing of picker
+presentation, file providers, external saving and the 1 GiB memory setting.
+The complete upstream CI suite has not been run.
+
 ## Preview build 5
 
 The user confirmed build 4 playback from the blue disk-cache range is smooth at

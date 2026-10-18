@@ -61,7 +61,7 @@ index 0000000..b44ad8d
 +egui_kittest = { workspace = true, features = ["wgpu"] }
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 0000000..440062d
+index 0000000..5a2aaec
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
 @@ -0,0 +1,191 @@
@@ -95,7 +95,7 @@ index 0000000..440062d
 +    }
 +
 +    fn set_cache(&mut self, mib: u32) {
-+        let mib = mib.clamp(64, 256);
++        let mib = mib.clamp(64, 1024);
 +        self.app.stop();
 +        self.app.session.prefs.memory.preview_cache_mb = mib;
 +        self.app.session.prefs_changed();
@@ -129,19 +129,19 @@ index 0000000..440062d
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 5").clicked() {
++                if ui.button("Diagnostics · build 6").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 5").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 6").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.label("One render worker · layer/media caches: 64 MiB each");
 +                ui.horizontal(|ui| {
 +                    ui.label("Preview cache:");
 +                    let current = self.app.frames.budget() >> 20;
-+                    for mib in [64_u32, 128, 256] {
++                    for mib in [256_u32, 512, 1024] {
 +                        if ui.selectable_label(current == mib as usize, format!("{mib} MiB")).clicked() {
 +                            self.set_cache(mib);
 +                        }
@@ -258,10 +258,10 @@ index 0000000..440062d
 +}
 diff --git a/apps/effectcraft-ios/src/files.rs b/apps/effectcraft-ios/src/files.rs
 new file mode 100644
-index 0000000..cfc30da
+index 0000000..1d5393b
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/files.rs
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,506 @@
 +//! App-local file dialogs, shared with Files through UIFileSharingEnabled.
 +use std::collections::BTreeSet;
 +use std::path::{Component, Path, PathBuf};
@@ -296,6 +296,9 @@ index 0000000..cfc30da
 +    unpacking: Option<Receiver<Result<PathBuf, String>>>,
 +    location: String,
 +    cancel: Option<Arc<AtomicBool>>,
++    native: crate::native_documents::NativeDocuments,
++    native_pending: Option<String>,
++    local_root: PathBuf,
 +}
 +
 +fn documents_folder(home: &Path) -> (PathBuf, String) {
@@ -340,6 +343,11 @@ index 0000000..cfc30da
 +        let (root, location) = documents_folder(&home);
 +        let error = std::fs::create_dir_all(&root).err().map(|e| e.to_string()).unwrap_or_default();
 +        let root = root.canonicalize().unwrap_or(root);
++        let native = crate::native_documents::NativeDocuments::new();
++        #[cfg(target_os = "ios")]
++        {
++            app.session.services = Arc::new(crate::native_documents::DocumentServices(native.clone()));
++        }
 +        let (send, inbox) = mpsc::sync_channel::<Request>(8);
 +        let wake = ctx.clone();
 +        app.hooks.file_dialog_async = Some(Box::new(move |kind, done| {
@@ -353,6 +361,9 @@ index 0000000..cfc30da
 +            wake.request_repaint();
 +        }));
 +        Self {
++            local_root: root.clone(),
++            native,
++            native_pending: None,
 +            dir: root.clone(),
 +            root,
 +            inbox,
@@ -403,6 +414,9 @@ index 0000000..cfc30da
 +    }
 +
 +    fn finish(&mut self, paths: Vec<String>) {
++        if let Some(id) = self.native_pending.take() {
++            self.native.cancel(&id);
++        }
 +        if let Some(cancel) = self.cancel.take() {
 +            cancel.store(true, Ordering::Relaxed);
 +        }
@@ -440,13 +454,17 @@ index 0000000..cfc30da
 +        {
 +            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip")) {
 +                let archive = path.clone();
-+                let docs = self.root.clone();
++                let docs = self.local_root.clone();
 +                let (send, receive) = mpsc::channel();
 +                let wake = ctx.clone();
 +                let cancel = Arc::new(AtomicBool::new(false));
++                let native = self.native.clone();
 +                self.cancel = Some(cancel.clone());
 +                match std::thread::Builder::new().name("ec-project-import".into()).stack_size(8 << 20).spawn(move || {
-+                    let result = crate::project_zip::import(&archive, &docs, &cancel);
++                    let result = native.copy_read(&archive).and_then(|copy| {
++                        let source = copy.as_ref().map(|c| c.path.as_path()).unwrap_or(archive.as_path());
++                        crate::project_zip::import(source, &docs, &cancel)
++                    });
 +                    let _ = send.send(result);
 +                    wake.request_repaint();
 +                }) {
@@ -478,6 +496,31 @@ index 0000000..cfc30da
 +            self.error.clear();
 +            self.refresh();
 +        }
++        if let Some(id) = self.native_pending.clone() {
++            match self.native.poll(&id) {
++                Some(Ok(value)) => {
++                    self.native_pending = None;
++                    if let Some(path) = value["path"].as_str() {
++                        match Path::new(path).canonicalize() {
++                            Ok(root) if root.is_dir() => {
++                                self.native.grant(root.clone());
++                                self.root = root.clone();
++                                self.dir = root;
++                                self.location = "Folder selected in iPad Files".into();
++                                self.error.clear();
++                                self.refresh();
++                            }
++                            _ => self.error = "The selected folder is unavailable".into(),
++                        }
++                    }
++                }
++                Some(Err(error)) => {
++                    self.native_pending = None;
++                    self.error = error;
++                }
++                None => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
++            }
++        }
 +        if let Some(receiver) = &self.unpacking {
 +            match receiver.try_recv() {
 +                Ok(Ok(path)) => {
@@ -501,7 +544,7 @@ index 0000000..cfc30da
 +        let save = matches!(request.kind, FileDialog::Save { .. });
 +        let many = matches!(request.kind, FileDialog::Open { many: true, .. });
 +        let folder = matches!(request.kind, FileDialog::Folder);
-+        let busy = self.unpacking.is_some();
++        let busy = self.unpacking.is_some() || self.native_pending.is_some();
 +        let mut navigate = None;
 +        let mut choose = false;
 +        let mut cancel = false;
@@ -519,11 +562,23 @@ index 0000000..cfc30da
 +                "Open file"
 +            });
 +            ui.label(&self.location);
-+            ui.label("Copy projects and media to this folder in Files, then tap Refresh.");
++            ui.label("Choose Other locations to open or save in another iPad or iCloud Drive folder.");
 +            ui.label("For Bridge ZIP: select the archive. Compressed ZIPs can be unpacked in Files first.");
 +            ui.horizontal(|ui| {
 +                if ui.add_enabled(!busy, egui::Button::new("Documents")).clicked() {
-+                    navigate = Some(self.root.clone());
++                    self.root = self.local_root.clone();
++                    self.location = "EffectCraft documents".into();
++                    navigate = Some(self.local_root.clone());
++                }
++                let ready = self.native.available();
++                if ui.add_enabled(!busy && ready, egui::Button::new("Other locations (Files)")).clicked() {
++                    match self.native.folder() {
++                        Ok(id) => self.native_pending = Some(id),
++                        Err(error) => self.error = error,
++                    }
++                }
++                if !ready && cfg!(target_os = "ios") {
++                    ctx.request_repaint_after(std::time::Duration::from_millis(500));
 +                }
 +                if ui.add_enabled(!busy && self.dir != self.root, egui::Button::new("Up")).clicked() {
 +                    navigate = self.dir.parent().map(Path::to_path_buf);
@@ -563,7 +618,7 @@ index 0000000..cfc30da
 +                }
 +            });
 +            if busy {
-+                ui.label("Unpacking project and media…");
++                ui.label(if self.native_pending.is_some() { "Choose a folder in the iPad Files window…" } else { "Unpacking project and media…" });
 +                ui.spinner();
 +            }
 +            if !self.error.is_empty() {
@@ -651,6 +706,9 @@ index 0000000..cfc30da
 +            unpacking: None,
 +            location: "Files / On My iPad / LiveContainer / EffectCraft".into(),
 +            cancel: None,
++            native: crate::native_documents::NativeDocuments::new(),
++            native_pending: None,
++            local_root: root.clone(),
 +        };
 +        {
 +            use egui_kittest::kittest::Queryable;
@@ -759,10 +817,10 @@ index 0000000..536a1b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 0000000..0178cad
+index 0000000..5bf7fea
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,94 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
 +//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -772,6 +830,7 @@ index 0000000..0178cad
 +mod diagnostics;
 +mod files;
 +mod journal;
++mod native_documents;
 +mod project_zip;
 +
 +fn main() -> eframe::Result {
@@ -779,7 +838,7 @@ index 0000000..0178cad
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=5 startup workers=1 preview_mib=256 disk_gib=1 project_files=true");
++    log::info!(target: "effectcraft_diagnostics", "build=6 startup workers=1 preview_mib=1024 disk_gib=1 system_files=true");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -813,7 +872,7 @@ index 0000000..0178cad
 +            let mut session = effectcraft_host::session();
 +            session.prefs.memory.layer_cache_mb = 64;
 +            session.prefs.memory.media_cache_mb = 64;
-+            session.prefs.memory.preview_cache_mb = 256;
++            session.prefs.memory.preview_cache_mb = 1024;
 +            session.prefs.previews.cache_frames_when_idle = true;
 +            session.prefs.disk.disk_cache_enabled = true;
 +            session.prefs.disk.disk_cache_max_gb = 1;
@@ -822,7 +881,7 @@ index 0000000..0178cad
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 5: File > Open / Save As. Copy projects into this app's Documents folder in Files.".to_string(),
++                Ok(_) => "Build 6: 1 GiB RAM cache. File > Open / Save As > Other locations (Files).".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -855,6 +914,188 @@ index 0000000..0178cad
 +            }))
 +        }),
 +    )
++}
+diff --git a/apps/effectcraft-ios/src/native_documents.rs b/apps/effectcraft-ios/src/native_documents.rs
+new file mode 100644
+index 0000000..f99a48e
+--- /dev/null
++++ b/apps/effectcraft-ios/src/native_documents.rs
+@@ -0,0 +1,176 @@
++//! Safe Rust side of the wrapper's UIKit folder picker and coordinated file access.
++use effectcraft_engine::Services;
++use serde_json::{Value, json};
++use std::path::{Path, PathBuf};
++use std::sync::{
++    Arc, Mutex,
++    atomic::{AtomicU64, Ordering},
++};
++use std::time::{Duration, Instant};
++
++static NEXT: AtomicU64 = AtomicU64::new(0);
++
++#[derive(Clone)]
++pub struct NativeDocuments {
++    directory: PathBuf,
++    grants: Arc<Mutex<Vec<PathBuf>>>,
++}
++
++pub struct ReadCopy {
++    pub path: PathBuf,
++}
++impl Drop for ReadCopy {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_file(&self.path);
++    }
++}
++
++impl NativeDocuments {
++    pub fn new() -> Self {
++        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
++        Self { directory: home.join("Library/Caches/EffectCraft/DocumentBridge6"), grants: Arc::default() }
++    }
++    pub fn available(&self) -> bool {
++        if !cfg!(target_os = "ios") {
++            return false;
++        }
++        let Ok(data) = std::fs::read(self.directory.join("ready.json")) else { return false };
++        let Ok(value) = serde_json::from_slice::<Value>(&data) else { return false };
++        value["pid"].as_u64() == Some(std::process::id() as u64) && value["version"].as_u64() == Some(1)
++    }
++    pub fn granted(&self, path: &Path) -> bool {
++        self.grants.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|root| path.starts_with(root))
++    }
++    pub fn grant(&self, path: PathBuf) {
++        let mut grants = self.grants.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
++        if !grants.contains(&path) && grants.len() < 32 {
++            grants.push(path);
++        }
++    }
++    fn id(&self) -> String {
++        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
++        format!("{}-{stamp}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed))
++    }
++    fn submit(&self, id: &str, request: Value) -> Result<(), String> {
++        std::fs::create_dir_all(&self.directory).map_err(|e| e.to_string())?;
++        let data = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
++        if data.len() > 16384 {
++            return Err("Document path is too long".into());
++        }
++        effectcraft_engine::FsServices.write_file(&self.directory.join(format!("{id}.request")).to_string_lossy(), &data).map_err(|e| e.to_string())
++    }
++    pub fn folder(&self) -> Result<String, String> {
++        if !self.available() {
++            return Err("System Files picker is not ready. Try again in a moment.".into());
++        }
++        let id = self.id();
++        self.submit(&id, json!({"action":"folder"}))?;
++        Ok(id)
++    }
++    pub fn cancel(&self, id: &str) {
++        let _ = std::fs::write(self.directory.join(format!("{id}.cancel")), []);
++    }
++    pub fn poll(&self, id: &str) -> Option<Result<Value, String>> {
++        let path = self.directory.join(format!("{id}.response"));
++        if !path.exists() {
++            return None;
++        }
++        let result = std::fs::read(&path).map_err(|e| e.to_string()).and_then(|bytes| {
++            if bytes.len() > 32768 {
++                return Err("Invalid document response".into());
++            }
++            let value: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
++            if let Some(error) = value["error"].as_str() { Err(error.to_string()) } else { Ok(value) }
++        });
++        let _ = std::fs::remove_file(path);
++        Some(result)
++    }
++    fn wait(&self, id: &str) -> Result<Value, String> {
++        let start = Instant::now();
++        loop {
++            if let Some(result) = self.poll(id) {
++                let value = result?;
++                return if value["ok"].as_bool() == Some(true) { Ok(value) } else { Err("Document operation was cancelled".into()) };
++            }
++            if start.elapsed() > Duration::from_secs(60) {
++                return Err("The file provider did not respond. Try again after downloading the file in Files.".into());
++            }
++            std::thread::sleep(Duration::from_millis(20));
++        }
++    }
++    pub fn copy_read(&self, path: &Path) -> Result<Option<ReadCopy>, String> {
++        if !self.granted(path) {
++            return Ok(None);
++        }
++        let id = self.id();
++        self.submit(&id, json!({"action":"read","path":path}))?;
++        let output = self.directory.join(format!("{id}.data"));
++        if let Err(e) = self.wait(&id) {
++            let _ = std::fs::remove_file(&output);
++            return Err(e);
++        }
++        Ok(Some(ReadCopy { path: output }))
++    }
++    fn write(&self, path: &str, data: &[u8]) -> Result<(), String> {
++        let id = self.id();
++        let staging = self.directory.join(format!("{id}.data"));
++        std::fs::create_dir_all(&self.directory).map_err(|e| e.to_string())?;
++        effectcraft_engine::FsServices.write_file(&staging.to_string_lossy(), data).map_err(|e| e.to_string())?;
++        let result = self.submit(&id, json!({"action":"write","path":path})).and_then(|_| self.wait(&id)).map(|_| ());
++        let _ = std::fs::remove_file(staging);
++        result
++    }
++}
++
++pub struct DocumentServices(pub NativeDocuments);
++impl Services for DocumentServices {
++    fn read_file(&self, path: &str) -> std::io::Result<Vec<u8>> {
++        let copy = self.0.copy_read(Path::new(path)).map_err(std::io::Error::other)?;
++        let input = copy.as_ref().map(|c| c.path.as_path()).unwrap_or_else(|| Path::new(path));
++        if std::fs::metadata(input)?.len() > 128 << 20 {
++            return Err(std::io::Error::other("Document exceeds 128 MiB"));
++        }
++        std::fs::read(input)
++    }
++    fn write_file(&self, path: &str, data: &[u8]) -> std::io::Result<()> {
++        if self.0.granted(Path::new(path)) {
++            self.0.write(path, data).map_err(std::io::Error::other)
++        } else {
++            effectcraft_engine::FsServices.write_file(path, data)
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn local_documents_keep_atomic_filesystem_services() {
++        let path = std::env::temp_dir().join(format!("ec-native-service-{}.ecproj", std::process::id()));
++        let services = DocumentServices(NativeDocuments::new());
++        services.write_file(path.to_str().unwrap(), b"{}").unwrap();
++        assert_eq!(services.read_file(path.to_str().unwrap()).unwrap(), b"{}");
++        let _ = std::fs::remove_file(path);
++    }
++    #[test]
++    fn grants_do_not_include_sibling_paths() {
++        let b = NativeDocuments::new();
++        b.grant(PathBuf::from("/docs/one"));
++        assert!(b.granted(Path::new("/docs/one/a.ecproj")));
++        assert!(!b.granted(Path::new("/docs/one-more/a.ecproj")));
++    }
++    #[test]
++    fn response_errors_and_cancellation_are_not_successful_writes() {
++        let dir = std::env::temp_dir().join(format!("ec-native-bridge-test-{}", std::process::id()));
++        std::fs::create_dir_all(&dir).unwrap();
++        let b = NativeDocuments { directory: dir.clone(), grants: Arc::default() };
++        std::fs::write(dir.join("1.response"), br#"{"error":"permission denied"}"#).unwrap();
++        assert!(b.poll("1").unwrap().is_err());
++        assert!(!dir.join("1.response").exists());
++        std::fs::write(dir.join("2.response"), br#"{"cancelled":true}"#).unwrap();
++        assert!(b.poll("2").unwrap().unwrap()["cancelled"].as_bool().unwrap());
++        std::fs::write(dir.join("3.response"), br#"{"cancelled":true}"#).unwrap();
++        assert!(b.wait("3").is_err());
++        let _ = std::fs::remove_dir_all(dir);
++    }
 +}
 diff --git a/apps/effectcraft-ios/src/project_zip.rs b/apps/effectcraft-ios/src/project_zip.rs
 new file mode 100644
@@ -2994,7 +3235,7 @@ index c150321..be6f1b4 100644
      static C: OnceLock<Mutex<HashMap<u64, (u64, Arc<Layout>)>>> = OnceLock::new();
      C.get_or_init(Default::default)
 diff --git a/crates/ui-egui/src/frames.rs b/crates/ui-egui/src/frames.rs
-index 059bc3a..d4bfe22 100644
+index 059bc3a..a297b4a 100644
 --- a/crates/ui-egui/src/frames.rs
 +++ b/crates/ui-egui/src/frames.rs
 @@ -40,9 +40,19 @@ const MAX_KEEPERS: usize = 64;
@@ -3002,8 +3243,8 @@ index 059bc3a..d4bfe22 100644
  /// video memory there is: each time the device runs out, the budget halves (to
  /// [`MIN_GPU_BUDGET`]) and the frame renders on the CPU (#106).
 -const GPU_BUDGET: usize = 1 << 30;
-+const IPAD_PREVIEW_MAX: usize = 256 << 20;
-+const GPU_BUDGET: usize = if cfg!(target_os = "ios") { IPAD_PREVIEW_MAX } else { 1 << 30 };
++const IPAD_PREVIEW_MAX: usize = 1 << 30;
++const GPU_BUDGET: usize = if cfg!(target_os = "ios") { 256 << 20 } else { 1 << 30 };
  const MIN_GPU_BUDGET: usize = 64 << 20;
  
 +/// Total retained viewer pixels (including GPU pixels), not total process memory.
