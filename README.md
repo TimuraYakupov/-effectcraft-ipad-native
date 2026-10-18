@@ -1,5 +1,28 @@
 # EffectCraft native iPad preview
 
+## Preview build 7: direct system file dialogs
+
+File > Open presents the system picker immediately: select a project or Bridge
+ZIP itself. File > Import supports up to 64 files; media are copied to a unique
+persistent Imported Media folder, streamed with a 1 GiB limit per file.
+
+Save As prepares a project snapshot without changing the session's path or saved
+state, then opens the system export/move picker with its filename. Normal engine
+Save As finishes after a destination is confirmed. Cancel leaves the project dirty.
+Ordinary Save writes back through coordinated access. Other single-file exports
+prepare local output first, then present the system export picker. The app-local
+browser remains a fallback after errors.
+
+Provider coordination and scope registration run off UIKit's main thread. Picker
+presentation/completion are logged. The build-6 folder-only flow is replaced;
+its exact device failure remains unconfirmed. Selection and external save behavior
+still require iPad testing. Permission is per-file for this launch; a loose project
+does not grant all its sibling media. Use a Bridge ZIP for project+media, or import
+media separately. Persistent security bookmarks are not implemented yet.
+
+RAM remains 1024 MiB, disk 1 GiB, one render worker. Output:
+`EffectCraft-Native-Preview-7.ipa`, build 7, same preview identity.
+
 ## Preview build 6: system Files folders and 1 GiB RAM
 
 File > Open / Save As > **Other locations (Files)** opens the iPadOS folder
@@ -126,7 +149,7 @@ portable Bridge ZIP export and audio output are not yet connected in this fronte
 Push this build repository to GitHub. The first push starts the build automatically;
 later builds can also be started with **Actions → Native iPad preview → Run workflow**.
 The standard `macos-15` runner builds an unsigned ARM64 iOS executable and packages
-`EffectCraft-Native-Preview-6.ipa` as an Actions artifact. No Apple signing key is needed
+`EffectCraft-Native-Preview-7.ipa` as an Actions artifact. No Apple signing key is needed
 for this unsigned output. Previous builds launched in LiveContainer on the test iPad.
 The preview uses `com.effectcraft.ipad.nativepreview`, separate from the stable app.
 

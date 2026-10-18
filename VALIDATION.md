@@ -1,5 +1,20 @@
 # Validation — 2026-10-18
 
+## Preview build 7
+
+The user reported that build 6's folder picker did not complete after Open. The
+cause is unconfirmed. Build 7 replaces the folder-only project/media flow with
+direct file selection and project export/move. Scope registration and provider
+copying have moved off the main thread. Imported files are copied persistently.
+
+Passed locally: locked ARM64 iOS cargo check; 12 native tests, including an
+expanded modal cancellation test proving that preparing a system Save As snapshot
+does not change the project path/saved revision or clear dirty state; 3 packaging
+tests. The fallback browser was rendered at 1024x768 and inspected. Layering and
+asset checks are run with the existing preview gates. The complete upstream CI
+suite is not run. UIKit compile/link and physical picker/provider testing remain
+cloud/device checks. RAM remains 1 GiB; stability needs device verification.
+
 ## Preview build 6
 
 The user confirmed project open/save in build 5. Build 6 adds the system folder

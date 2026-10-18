@@ -16,17 +16,19 @@
 @property(nonatomic,strong) UIDocumentPickerViewController *picker;
 @property(nonatomic,copy) NSString *pending;
 @property(nonatomic,strong) NSURL *pendingRoot;
+@property(nonatomic,strong) NSDictionary *request;
 @end
 
 static ECDocuments *ECBridge;
 static dispatch_source_t ECTimer;
+static dispatch_queue_t ECQueue;
 
 static NSURL *ECRoot(void) {
     const char *home = getenv("HOME");
     if (!home) return nil;
     NSString *value = [NSString stringWithUTF8String:home];
     if (!value) return nil;
-    return [NSURL fileURLWithPath:[value stringByAppendingPathComponent:@"Library/Caches/EffectCraft/DocumentBridge6"] isDirectory:YES];
+    return [NSURL fileURLWithPath:[value stringByAppendingPathComponent:@"Library/Caches/EffectCraft/DocumentBridge7"] isDirectory:YES];
 }
 static NSURL *ECFile(NSURL *root, NSString *name) { return [root URLByAppendingPathComponent:name]; }
 static void ECReply(NSURL *root, NSString *name, NSDictionary *value) {
@@ -52,37 +54,77 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
 - (void)complete:(NSDictionary *)response {
     @synchronized(self) {
         if (self.pending) {
+            NSLog(@"EffectCraft Files: completed %@", self.request[@"action"]);
             ECReply(self.pendingRoot,self.pending,response);
             [[NSFileManager defaultManager] removeItemAtURL:ECFile(self.pendingRoot,[self.pending stringByAppendingString:@".cancel"]) error:nil];
         }
         self.pending = nil;
         self.pendingRoot = nil;
         self.picker = nil;
+        self.request = nil;
     }
 }
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller { [self complete:@{@"cancelled":@YES}]; }
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    NSURL *url = urls.firstObject;
-    if (!url.isFileURL) { [self complete:@{@"error":@"The provider did not return a folder"}]; return; }
-    BOOL scoped = [url startAccessingSecurityScopedResource];
-    ECFolderPresenter *existing = ECPresenter(url.path);
-    if (!existing) {
-        @synchronized(self) {
-            if (self.grants.count >= 32) {
-                if (scoped) [url stopAccessingSecurityScopedResource];
-                [self complete:@{@"error":@"Too many folders selected. Save your work and relaunch the app."}]; return;
-            }
-            ECFolderPresenter *presenter = [ECFolderPresenter new];
-            presenter.presentedItemURL = url;
-            presenter.presentedItemOperationQueue = [NSOperationQueue new];
-            presenter.presentedItemOperationQueue.maxConcurrentOperationCount = 1;
-            [NSFileCoordinator addFilePresenter:presenter];
-            [self.grants addObject:@{@"url":url,@"scoped":@(scoped),@"presenter":presenter}];
+    NSLog(@"EffectCraft Files: picker returned %lu URLs", (unsigned long)urls.count);
+    if (!urls.count || urls.count > 64) { [self complete:@{@"error":@"Select between 1 and 64 files"}]; return; }
+    NSDictionary *request = self.request;
+    // Provider coordination and resource registration must never stall UIKit's delegate.
+    dispatch_async(ECQueue, ^{
+        NSMutableArray *paths = [NSMutableArray new];
+        NSString *importTo = [request[@"import_to"] isKindOfClass:NSString.class] ? request[@"import_to"] : nil;
+        NSURL *importFolder = importTo ? [[NSURL fileURLWithPath:importTo isDirectory:YES] URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES] : nil;
+        NSError *error = nil;
+        if (importFolder && ![NSFileManager.defaultManager createDirectoryAtURL:importFolder withIntermediateDirectories:YES attributes:nil error:&error]) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self complete:@{@"error":error.localizedDescription ?: @"Cannot create import folder"}]; }); return;
         }
-    } else if (scoped) { [url stopAccessingSecurityScopedResource]; }
-    [self complete:@{@"path":url.path}];
+        for (NSURL *url in urls) {
+            if (!url.isFileURL) { error = [NSError errorWithDomain:@"EffectCraft" code:1 userInfo:@{NSLocalizedDescriptionKey:@"The provider returned an invalid file"}]; break; }
+            BOOL scoped = [url startAccessingSecurityScopedResource];
+            NSNumber *directory = nil;
+            [url getResourceValue:&directory forKey:NSURLIsDirectoryKey error:&error];
+            BOOL folderRequest = [request[@"action"] isEqual:@"folder"];
+            if (error || !directory || directory.boolValue != folderRequest) {
+                if (scoped) [url stopAccessingSecurityScopedResource];
+                error = error ?: [NSError errorWithDomain:@"EffectCraft" code:5 userInfo:@{NSLocalizedDescriptionKey:folderRequest ? @"Select a folder" : @"Select a file, not a folder"}]; break;
+            }
+            if (importFolder) {
+                NSURL *destination = [importFolder URLByAppendingPathComponent:url.lastPathComponent];
+                NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+                __block NSError *copyError = nil;
+                __block BOOL copied = NO;
+                [coordinator coordinateReadingItemAtURL:url options:0 error:&error byAccessor:^(NSURL *source) {
+                    NSNumber *size = nil; [source getResourceValue:&size forKey:NSURLFileSizeKey error:&copyError];
+                    if (!size || size.unsignedLongLongValue > (1ULL << 30)) { copyError = [NSError errorWithDomain:@"EffectCraft" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Imported files must be smaller than 1 GiB"}]; return; }
+                    copied = [NSFileManager.defaultManager copyItemAtURL:source toURL:destination error:&copyError];
+                }];
+                if (scoped) [url stopAccessingSecurityScopedResource];
+                if (!copied) { error = copyError ?: error ?: [NSError errorWithDomain:@"EffectCraft" code:3 userInfo:@{NSLocalizedDescriptionKey:@"Cannot copy the selected file"}]; break; }
+                [paths addObject:destination.path];
+            } else {
+                @synchronized(self) {
+                    if (!ECPresenter(url.path)) {
+                        if (self.grants.count >= 256) {
+                            if (scoped) [url stopAccessingSecurityScopedResource];
+                            error = [NSError errorWithDomain:@"EffectCraft" code:4 userInfo:@{NSLocalizedDescriptionKey:@"Save your work and relaunch before selecting more files"}]; break;
+                        }
+                        ECFolderPresenter *presenter = [ECFolderPresenter new];
+                        presenter.presentedItemURL = url;
+                        presenter.presentedItemOperationQueue = [NSOperationQueue new];
+                        presenter.presentedItemOperationQueue.maxConcurrentOperationCount = 1;
+                        [NSFileCoordinator addFilePresenter:presenter];
+                        [self.grants addObject:@{@"url":url,@"scoped":@(scoped),@"presenter":presenter}];
+                    } else if (scoped) { [url stopAccessingSecurityScopedResource]; }
+                }
+                [paths addObject:url.path];
+            }
+        }
+        if (error && importFolder) [NSFileManager.defaultManager removeItemAtURL:importFolder error:nil];
+        NSDictionary *response = error ? @{@"error":error.localizedDescription} : @{@"paths":paths};
+        dispatch_async(dispatch_get_main_queue(), ^{ [self complete:response]; });
+    });
 }
-- (void)choose:(NSString *)name root:(NSURL *)root {
+- (void)choose:(NSString *)name root:(NSURL *)root request:(NSDictionary *)request {
     if ([[NSFileManager defaultManager] fileExistsAtPath:ECFile(root,[name stringByAppendingString:@".cancel"]).path]) {
         ECReply(root,name,@{@"cancelled":@YES}); return;
     }
@@ -97,11 +139,19 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
     }
     while (view.presentedViewController && !view.presentedViewController.isBeingDismissed) view = view.presentedViewController;
     if (!view || !view.view.window) { ECReply(root,name,@{@"error":@"No active iPad window. Close the menu and try again."}); return; }
-    @synchronized(self) { self.pending = name; self.pendingRoot = root; }
-    self.picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
+    @synchronized(self) { self.pending = name; self.pendingRoot = root; self.request = request; }
+    NSString *action = request[@"action"];
+    if ([action isEqual:@"export"]) {
+        NSString *path = request[@"path"];
+        if (![path isKindOfClass:NSString.class] || ![NSFileManager.defaultManager fileExistsAtPath:path]) { [self complete:@{@"error":@"The file is not ready to save"}]; return; }
+        self.picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[[NSURL fileURLWithPath:path]] asCopy:NO];
+    } else {
+        self.picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:[action isEqual:@"folder"] ? @[UTTypeFolder] : @[UTTypeItem] asCopy:NO];
+    }
     self.picker.delegate = self;
-    self.picker.allowsMultipleSelection = NO;
+    self.picker.allowsMultipleSelection = [action isEqual:@"open"] && [request[@"many"] boolValue];
     self.picker.modalPresentationStyle = UIModalPresentationFormSheet;
+    NSLog(@"EffectCraft Files: presenting %@", action);
     [view presentViewController:self.picker animated:YES completion:nil];
 }
 @end
@@ -159,13 +209,14 @@ static void ECTick(void) {
             if (![file.pathExtension isEqualToString:@"request"] || count++ >= 32) continue;
             NSString *name = file.lastPathComponent.stringByDeletingPathExtension;
             if (!ECValidName(name)) continue;
+            if (![name hasPrefix:[NSString stringWithFormat:@"%d-",getpid()]]) { [fm removeItemAtURL:file error:nil]; continue; }
             NSNumber *size = nil; [file getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
             if (size.unsignedLongLongValue > 16384) { [fm removeItemAtURL:file error:nil]; continue; }
             NSData *bytes = [NSData dataWithContentsOfURL:file];
             NSDictionary *request = bytes ? [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil] : nil;
             [fm removeItemAtURL:file error:nil];
             if (![request isKindOfClass:NSDictionary.class]) { ECReply(root,name,@{@"error":@"Invalid document request"}); continue; }
-            if ([request[@"action"] isEqual:@"folder"]) { dispatch_async(dispatch_get_main_queue(), ^{ [ECBridge choose:name root:root]; }); }
+            if ([@[@"folder",@"open",@"export"] containsObject:request[@"action"]]) { dispatch_async(dispatch_get_main_queue(), ^{ [ECBridge choose:name root:root request:request]; }); }
             else { ECIO(root,name,request); }
         }
     }
@@ -174,8 +225,8 @@ static void ECTick(void) {
 __attribute__((constructor,used)) static void ECInstallDocuments(void) {
     @autoreleasepool {
         ECBridge = [ECDocuments new]; ECBridge.grants = [NSMutableArray new];
-        dispatch_queue_t queue = dispatch_queue_create("effectcraft.document-access", DISPATCH_QUEUE_SERIAL);
-        ECTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,queue);
+        ECQueue = dispatch_queue_create("effectcraft.document-access", DISPATCH_QUEUE_SERIAL);
+        ECTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,ECQueue);
         dispatch_source_set_timer(ECTimer,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),NSEC_PER_SEC/5,NSEC_PER_SEC/20);
         dispatch_source_set_event_handler(ECTimer, ^{ ECTick(); });
         dispatch_resume(ECTimer);

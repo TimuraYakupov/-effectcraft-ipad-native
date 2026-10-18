@@ -61,7 +61,7 @@ index 0000000..b44ad8d
 +egui_kittest = { workspace = true, features = ["wgpu"] }
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 0000000..5a2aaec
+index 0000000..e41d50d
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
 @@ -0,0 +1,191 @@
@@ -129,14 +129,14 @@ index 0000000..5a2aaec
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 6").clicked() {
++                if ui.button("Diagnostics · build 7").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 6").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 7").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.label("One render worker · layer/media caches: 64 MiB each");
 +                ui.horizontal(|ui| {
 +                    ui.label("Preview cache:");
@@ -258,10 +258,10 @@ index 0000000..5a2aaec
 +}
 diff --git a/apps/effectcraft-ios/src/files.rs b/apps/effectcraft-ios/src/files.rs
 new file mode 100644
-index 0000000..1d5393b
+index 0000000..33dce29
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/files.rs
-@@ -0,0 +1,506 @@
+@@ -0,0 +1,663 @@
 +//! App-local file dialogs, shared with Files through UIFileSharingEnabled.
 +use std::collections::BTreeSet;
 +use std::path::{Component, Path, PathBuf};
@@ -299,6 +299,10 @@ index 0000000..1d5393b
 +    native: crate::native_documents::NativeDocuments,
 +    native_pending: Option<String>,
 +    local_root: PathBuf,
++    system: bool,
++    stage: Option<PathBuf>,
++    output_wait: Option<std::time::Instant>,
++    export_only: bool,
 +}
 +
 +fn documents_folder(home: &Path) -> (PathBuf, String) {
@@ -364,6 +368,10 @@ index 0000000..1d5393b
 +            local_root: root.clone(),
 +            native,
 +            native_pending: None,
++            system: false,
++            stage: None,
++            output_wait: None,
++            export_only: false,
 +            dir: root.clone(),
 +            root,
 +            inbox,
@@ -421,9 +429,53 @@ index 0000000..1d5393b
 +            cancel.store(true, Ordering::Relaxed);
 +        }
 +        self.unpacking = None;
++        if let Some(path) = self.stage.take() {
++            let _ = std::fs::remove_file(&path);
++            if let Some(parent) = path.parent() {
++                let _ = std::fs::remove_dir(parent);
++            }
++        }
++        self.system = false;
++        self.output_wait = None;
++        self.export_only = false;
 +        if let Some(request) = self.active.take() {
 +            (request.done)(paths);
 +        }
++    }
++
++    fn start_system(&mut self, app: &mut EffectcraftApp) -> Result<(), String> {
++        let Some(request) = &self.active else { return Ok(()) };
++        let id = match &request.kind {
++            FileDialog::OpenProject => self.native.open(false, None)?,
++            FileDialog::Open { many, .. } => self.native.open(*many, Some(&self.local_root.join("Imported Media")))?,
++            FileDialog::Folder => self.native.folder()?,
++            FileDialog::Save { default, ext, project } => {
++                let name = Path::new(default).file_name().and_then(|s| s.to_str()).unwrap_or("Project.ecproj");
++                let path = self.native.staging(name, ext)?;
++                self.stage = Some(path.clone());
++                if *project {
++                    // Prepare an export snapshot without changing the document's saved state.
++                    // The ordinary Save As command runs only after the destination is confirmed.
++                    let text = app.session.project.to_file_json_with_view(&app.session.saved_view()).map_err(|e| e.to_string())?;
++                    use effectcraft_engine::Services;
++                    effectcraft_engine::FsServices.write_file(&path.to_string_lossy(), text.as_bytes()).map_err(|e| e.to_string())?;
++                    self.native.export(&path)?
++                } else {
++                    // Other export commands generate their bytes through the engine first.
++                    // Cancelling the picker discards this new temporary output only.
++                    if let Some(request) = self.active.take() {
++                        (request.done)(vec![path.to_string_lossy().into_owned()]);
++                    }
++                    self.output_wait = Some(std::time::Instant::now());
++                    self.export_only = true;
++                    self.system = true;
++                    return Ok(());
++                }
++            }
++        };
++        self.native_pending = Some(id);
++        self.system = true;
++        Ok(())
 +    }
 +
 +    fn choose(&mut self, ctx: &egui::Context) {
@@ -483,6 +535,7 @@ index 0000000..1d5393b
 +
 +    pub fn show(&mut self, app: &mut EffectcraftApp, ctx: &egui::Context) {
 +        if self.active.is_none()
++            && !self.export_only
 +            && let Ok(request) = self.inbox.try_recv()
 +        {
 +            app.stop();
@@ -495,30 +548,103 @@ index 0000000..1d5393b
 +            self.active = Some(request);
 +            self.error.clear();
 +            self.refresh();
++            if self.native.available() {
++                if let Err(error) = self.start_system(app) {
++                    self.error = error;
++                }
++            }
++        }
++        if let Some(started) = self.output_wait {
++            if let Some(path) = &self.stage
++                && path.is_file()
++                && app.session.render_job.is_none()
++                && std::fs::metadata(path)
++                    .and_then(|m| m.modified())
++                    .ok()
++                    .and_then(|t| t.elapsed().ok())
++                    .is_some_and(|elapsed| elapsed >= std::time::Duration::from_millis(500))
++            {
++                self.output_wait = None;
++                match self.native.export(path) {
++                    Ok(id) => self.native_pending = Some(id),
++                    Err(error) => {
++                        app.ui.status = error;
++                        self.finish(vec![]);
++                    }
++                }
++            } else if started.elapsed() > std::time::Duration::from_secs(120) && app.session.render_job.is_none() {
++                app.ui.status = "The export did not produce a file. Check the command error and try again.".into();
++                self.finish(vec![]);
++            }
++            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +        }
 +        if let Some(id) = self.native_pending.clone() {
 +            match self.native.poll(&id) {
 +                Some(Ok(value)) => {
 +                    self.native_pending = None;
-+                    if let Some(path) = value["path"].as_str() {
-+                        match Path::new(path).canonicalize() {
-+                            Ok(root) if root.is_dir() => {
-+                                self.native.grant(root.clone());
-+                                self.root = root.clone();
-+                                self.dir = root;
-+                                self.location = "Folder selected in iPad Files".into();
-+                                self.error.clear();
-+                                self.refresh();
++                    if value["cancelled"].as_bool() == Some(true) {
++                        self.finish(vec![]);
++                        return;
++                    }
++                    let paths: Vec<PathBuf> = value["paths"].as_array().into_iter().flatten().take(64).filter_map(|v| v.as_str().map(PathBuf::from)).collect();
++                    if paths.is_empty() {
++                        self.error = "The iPad Files window did not return a file".into();
++                        self.system = false;
++                    } else if self.export_only {
++                        app.ui.status = format!("Saved {}", paths.first().map(|p| p.to_string_lossy()).unwrap_or_default());
++                        self.finish(vec![]);
++                        return;
++                    } else {
++                        if self.active.as_ref().is_some_and(|r| !matches!(r.kind, FileDialog::Open { .. })) {
++                            for path in &paths {
++                                self.native.grant(path.clone());
 +                            }
-+                            _ => self.error = "The selected folder is unavailable".into(),
++                        }
++                        self.selected = paths.iter().cloned().collect();
++                        if self.active.as_ref().is_some_and(|r| matches!(r.kind, FileDialog::OpenProject)) {
++                            self.system = false;
++                            self.choose(ctx);
++                        } else {
++                            self.finish(paths.iter().map(|p| p.to_string_lossy().into_owned()).collect());
 +                        }
 +                    }
 +                }
 +                Some(Err(error)) => {
 +                    self.native_pending = None;
 +                    self.error = error;
++                    self.system = false;
++                    if self.export_only {
++                        app.ui.status = self.error.clone();
++                        self.finish(vec![]);
++                        return;
++                    }
 +                }
 +                None => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
++            }
++        }
++        if self.system {
++            let mut cancel = false;
++            egui::Modal::new(egui::Id::new("ipad-system-files")).show(ctx, |ui| {
++                ui.heading("iPad Files");
++                ui.label(if self.unpacking.is_some() {
++                    "Unpacking project and media…"
++                } else if self.output_wait.is_some() {
++                    "Preparing file…"
++                } else {
++                    "Select a file or save location in the iPad Files window."
++                });
++                ui.spinner();
++                if ui.button("Cancel").clicked() {
++                    cancel = true;
++                }
++            });
++            if cancel {
++                self.finish(vec![]);
++            }
++            ctx.request_repaint_after(std::time::Duration::from_millis(100));
++            // Still poll the extraction worker below on subsequent frames.
++            if self.unpacking.is_none() {
++                return;
 +            }
 +        }
 +        if let Some(receiver) = &self.unpacking {
@@ -562,7 +688,7 @@ index 0000000..1d5393b
 +                "Open file"
 +            });
 +            ui.label(&self.location);
-+            ui.label("Choose Other locations to open or save in another iPad or iCloud Drive folder.");
++            ui.label("Browse iPad files opens the system file picker directly.");
 +            ui.label("For Bridge ZIP: select the archive. Compressed ZIPs can be unpacked in Files first.");
 +            ui.horizontal(|ui| {
 +                if ui.add_enabled(!busy, egui::Button::new("Documents")).clicked() {
@@ -571,11 +697,12 @@ index 0000000..1d5393b
 +                    navigate = Some(self.local_root.clone());
 +                }
 +                let ready = self.native.available();
-+                if ui.add_enabled(!busy && ready, egui::Button::new("Other locations (Files)")).clicked() {
-+                    match self.native.folder() {
-+                        Ok(id) => self.native_pending = Some(id),
-+                        Err(error) => self.error = error,
-+                    }
++                if ui.add_enabled(!busy && ready, egui::Button::new("Browse iPad files")).clicked() {
++                    choose = false;
++                    navigate = None;
++                    self.error.clear();
++                    // Started after drawing, so the dialog request is not borrowed here.
++                    self.system = true;
 +                }
 +                if !ready && cfg!(target_os = "ios") {
 +                    ctx.request_repaint_after(std::time::Duration::from_millis(500));
@@ -618,7 +745,7 @@ index 0000000..1d5393b
 +                }
 +            });
 +            if busy {
-+                ui.label(if self.native_pending.is_some() { "Choose a folder in the iPad Files window…" } else { "Unpacking project and media…" });
++                ui.label(if self.native_pending.is_some() { "Choose a file in the iPad Files window…" } else { "Unpacking project and media…" });
 +                ui.spinner();
 +            }
 +            if !self.error.is_empty() {
@@ -650,7 +777,12 @@ index 0000000..1d5393b
 +                }
 +            });
 +        });
-+        if cancel {
++        if self.system && self.native_pending.is_none() && self.unpacking.is_none() {
++            if let Err(error) = self.start_system(app) {
++                self.system = false;
++                self.error = error;
++            }
++        } else if cancel {
 +            self.finish(vec![]);
 +        } else if let Some(path) = navigate {
 +            match path.canonicalize() {
@@ -708,6 +840,10 @@ index 0000000..1d5393b
 +            cancel: None,
 +            native: crate::native_documents::NativeDocuments::new(),
 +            native_pending: None,
++            system: false,
++            stage: None,
++            output_wait: None,
++            export_only: false,
 +            local_root: root.clone(),
 +        };
 +        {
@@ -727,6 +863,27 @@ index 0000000..1d5393b
 +        }
 +        assert!(received.recv().unwrap().is_empty());
 +        assert!(picker.active.is_none());
++        // Preparing the system Save As must not mark an unsaved document saved.
++        // On the host there is no UIKit bridge: exercise that failure and cancellation.
++        app.session.execute("comp.new", serde_json::json!({"name":"Unsaved comp", "width":64,"height":64,"duration":1})).unwrap();
++        assert!(app.session.is_dirty());
++        let original = app.session.path.clone();
++        let saved_revision = app.session.saved_revision;
++        let (answer, received) = mpsc::channel();
++        picker.active = Some(Request {
++            kind: FileDialog::Save { default: "My Project.ecproj".into(), ext: "ecproj".into(), project: true },
++            done: Box::new(move |paths| answer.send(paths).unwrap()),
++        });
++        assert!(picker.start_system(&mut app).is_err());
++        let snapshot = picker.stage.clone().unwrap();
++        let text = std::fs::read_to_string(&snapshot).unwrap();
++        assert!(effectcraft_engine::project::Project::from_json(&text).is_ok());
++        picker.finish(vec![]);
++        assert!(received.recv().unwrap().is_empty());
++        assert!(!snapshot.exists());
++        assert!(app.session.is_dirty());
++        assert_eq!(app.session.path, original);
++        assert_eq!(app.session.saved_revision, saved_revision);
 +        let _ = std::fs::remove_dir_all(root);
 +    }
 +
@@ -817,7 +974,7 @@ index 0000000..536a1b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 0000000..5bf7fea
+index 0000000..ae781db
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
 @@ -0,0 +1,94 @@
@@ -838,7 +995,7 @@ index 0000000..5bf7fea
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=6 startup workers=1 preview_mib=1024 disk_gib=1 system_files=true");
++    log::info!(target: "effectcraft_diagnostics", "build=7 startup workers=1 preview_mib=1024 disk_gib=1 direct_files=true");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -881,7 +1038,7 @@ index 0000000..5bf7fea
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 6: 1 GiB RAM cache. File > Open / Save As > Other locations (Files).".to_string(),
++                Ok(_) => "Build 7: File > Open, Save As and Import use the iPad Files window directly. RAM cache: 1 GiB.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -917,10 +1074,10 @@ index 0000000..5bf7fea
 +}
 diff --git a/apps/effectcraft-ios/src/native_documents.rs b/apps/effectcraft-ios/src/native_documents.rs
 new file mode 100644
-index 0000000..f99a48e
+index 0000000..b52639d
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/native_documents.rs
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,190 @@
 +//! Safe Rust side of the wrapper's UIKit folder picker and coordinated file access.
 +use effectcraft_engine::Services;
 +use serde_json::{Value, json};
@@ -951,7 +1108,7 @@ index 0000000..f99a48e
 +impl NativeDocuments {
 +    pub fn new() -> Self {
 +        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-+        Self { directory: home.join("Library/Caches/EffectCraft/DocumentBridge6"), grants: Arc::default() }
++        Self { directory: home.join("Library/Caches/EffectCraft/DocumentBridge7"), grants: Arc::default() }
 +    }
 +    pub fn available(&self) -> bool {
 +        if !cfg!(target_os = "ios") {
@@ -966,7 +1123,7 @@ index 0000000..f99a48e
 +    }
 +    pub fn grant(&self, path: PathBuf) {
 +        let mut grants = self.grants.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-+        if !grants.contains(&path) && grants.len() < 32 {
++        if !grants.contains(&path) && grants.len() < 256 {
 +            grants.push(path);
 +        }
 +    }
@@ -983,12 +1140,26 @@ index 0000000..f99a48e
 +        effectcraft_engine::FsServices.write_file(&self.directory.join(format!("{id}.request")).to_string_lossy(), &data).map_err(|e| e.to_string())
 +    }
 +    pub fn folder(&self) -> Result<String, String> {
++        self.pick(json!({"action":"folder"}))
++    }
++    pub fn open(&self, many: bool, import_to: Option<&Path>) -> Result<String, String> {
++        self.pick(json!({"action":"open", "many":many, "import_to":import_to}))
++    }
++    pub fn export(&self, file: &Path) -> Result<String, String> {
++        self.pick(json!({"action":"export", "path":file}))
++    }
++    fn pick(&self, request: Value) -> Result<String, String> {
 +        if !self.available() {
 +            return Err("System Files picker is not ready. Try again in a moment.".into());
 +        }
 +        let id = self.id();
-+        self.submit(&id, json!({"action":"folder"}))?;
++        self.submit(&id, request)?;
 +        Ok(id)
++    }
++    pub fn staging(&self, name: &str, ext: &str) -> Result<PathBuf, String> {
++        let dir = self.directory.join(self.id());
++        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
++        crate::files::save_path(&dir, &dir, name, ext)
 +    }
 +    pub fn cancel(&self, id: &str) {
 +        let _ = std::fs::write(self.directory.join(format!("{id}.cancel")), []);
