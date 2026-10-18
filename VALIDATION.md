@@ -1,5 +1,27 @@
 # Validation — 2026-10-18
 
+## Preview build 4
+
+Build 3 was tested by the user at 256 MiB: Quarter cached the whole demo and
+played smoothly; Half/Full played cached portions smoothly but exhausted RAM.
+Build 4 adds a 1 GiB default disk cache (1/2/4 GiB controls), extends iPad idle
+and cache-before-play ranges beyond RAM, and restores frames on the worker.
+The iPad stores final RGBA8 frames, including read-back GPU frames, with a bounded
+32 MiB compressed write queue. Layer disk caching is off on iPad. The cache is
+inside Library/Caches and can be purged by iPadOS.
+
+New regression cases cover disk availability beyond a one-frame RAM budget,
+worker restoration of actual pixels without rendering, persistence on reopen,
+quality/options/content isolation, malformed frame lengths, write failure and
+the prefetch storage threshold. Device playback from disk remains unverified.
+
+Passed on Linux (Rust 1.95.0): locked ARM64 iOS cargo check; 11 render disk-cache
+tests and 2 UI frame-cache tests; 2 journal tests; 3 IPA packaging tests; formatting
+of changed Rust files; dependency layering; asset attribution (39 assets). Test
+profile optimization was disabled to keep host regression compilation practical.
+The patch was reapplied to pinned upstream source and compared byte for byte.
+The complete upstream CI suite has not been run.
+
 ## Preview build 3
 
 The user confirmed build 2 playback without a process exit. Screenshots show eight

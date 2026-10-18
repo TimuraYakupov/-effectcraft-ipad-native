@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index ce8fe123..f3109777 100644
+index ce8fe12..f310977 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -1387,6 +1387,19 @@ dependencies = [
@@ -32,7 +32,7 @@ index ce8fe123..f3109777 100644
   "egui",
 diff --git a/apps/effectcraft-ios/Cargo.toml b/apps/effectcraft-ios/Cargo.toml
 new file mode 100644
-index 00000000..4d925267
+index 0000000..4d92526
 --- /dev/null
 +++ b/apps/effectcraft-ios/Cargo.toml
 @@ -0,0 +1,19 @@
@@ -57,10 +57,10 @@ index 00000000..4d925267
 +winit = { version = "0.30", default-features = false }
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..e51c1fbb
+index 0000000..da1dfbd
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,189 @@
 +//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
 +use std::path::PathBuf;
 +
@@ -78,6 +78,17 @@ index 00000000..e51c1fbb
 +}
 +
 +impl DiagnosticApp {
++    fn set_disk(&mut self, enabled: bool, gib: u32) {
++        self.app.stop();
++        self.app.session.prefs.disk.disk_cache_enabled = enabled;
++        self.app.session.prefs.disk.disk_cache_max_gb = gib.clamp(1, 4);
++        self.app.session.prefs_changed();
++        if enabled && self.app.session.disk_cache.is_none() {
++            self.app.ui.status = "Disk cache could not open. Preview is using RAM; details are in the log.".into();
++        }
++        log::info!(target: "effectcraft_diagnostics", "disk_enabled={enabled} disk_gib={}", gib.clamp(1, 4));
++    }
++
 +    fn set_cache(&mut self, mib: u32) {
 +        let mib = mib.clamp(64, 256);
 +        self.app.stop();
@@ -113,14 +124,14 @@ index 00000000..e51c1fbb
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 3").clicked() {
++                if ui.button("Diagnostics · build 4").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 3").open(&mut open).default_width(650.0).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 4").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.label("One render worker · layer/media caches: 64 MiB each");
 +                ui.horizontal(|ui| {
 +                    ui.label("Preview cache:");
@@ -140,6 +151,49 @@ index 00000000..e51c1fbb
 +                        c.gpu_bytes as f64 / 1048576.0
 +                    ));
 +                }
++                ui.separator();
++                let mut disk_enabled = self.app.session.prefs.disk.disk_cache_enabled;
++                let disk_gib = self.app.session.prefs.disk.disk_cache_max_gb;
++                if ui.checkbox(&mut disk_enabled, "Use disk cache").changed() {
++                    self.set_disk(disk_enabled, disk_gib);
++                }
++                ui.horizontal(|ui| {
++                    ui.label("Disk limit:");
++                    for gib in [1_u32, 2, 4] {
++                        if ui.selectable_label(disk_gib == gib, format!("{gib} GiB")).clicked() {
++                            self.set_disk(disk_enabled, gib);
++                        }
++                    }
++                });
++                if let Some(dc) = self.app.session.disk_cache.clone() {
++                    let stats = dc.stats();
++                    ui.label(format!(
++                        "Disk: {} frames · {:.1} / {:.0} MiB · reads: {} · writes: {}",
++                        dc.keys(effectcraft_engine::render::disk_cache::Kind::Frame).len(),
++                        stats.bytes as f64 / 1048576.0,
++                        stats.max_bytes as f64 / 1048576.0,
++                        stats.hits,
++                        stats.writes
++                    ));
++                    if stats.errors > 0 {
++                        ui.colored_label(
++                            egui::Color32::YELLOW,
++                            "Disk writes failed. Free storage or turn disk cache off and on to retry. RAM preview still works.",
++                        );
++                    } else if !stats.can_prefetch() {
++                        ui.label("Disk cache is nearly full. Increase its limit or clear it to keep caching.");
++                    }
++                    if ui.button("Clear disk cache").clicked() {
++                        self.app.stop();
++                        if let Err(error) = effectcraft_ui_egui::menus::invoke(&mut self.app, ctx, "edit.purge", serde_json::json!({"what":"disk"})) {
++                            self.app.ui.status = error;
++                        }
++                    }
++                } else if disk_enabled {
++                    ui.colored_label(egui::Color32::YELLOW, "Disk cache unavailable. Preview is using RAM.");
++                }
++                ui.label("Green = RAM · Blue = disk. Cached frames survive relaunch; iPadOS may reclaim disk cache.");
++                ui.separator();
 +                let mut idle = self.app.session.prefs.previews.cache_frames_when_idle;
 +                if ui.checkbox(&mut idle, "Cache frames while idle").changed() {
 +                    self.app.session.prefs.previews.cache_frames_when_idle = idle;
@@ -198,7 +252,7 @@ index 00000000..e51c1fbb
 +}
 diff --git a/apps/effectcraft-ios/src/journal.rs b/apps/effectcraft-ios/src/journal.rs
 new file mode 100644
-index 00000000..536a1b26
+index 0000000..536a1b2
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/journal.rs
 @@ -0,0 +1,41 @@
@@ -245,10 +299,10 @@ index 00000000..536a1b26
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..1fea3d1b
+index 0000000..e3150f2
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,81 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
 +//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -263,7 +317,7 @@ index 00000000..1fea3d1b
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=3 startup workers=1 preview_mib=128 preview_max_mib=256 layer_media_mib=64 idle_cache=true");
++    log::info!(target: "effectcraft_diagnostics", "build=4 startup workers=1 preview_mib=256 disk_gib=1 idle_cache=true");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -297,14 +351,16 @@ index 00000000..1fea3d1b
 +            let mut session = effectcraft_host::session();
 +            session.prefs.memory.layer_cache_mb = 64;
 +            session.prefs.memory.media_cache_mb = 64;
-+            session.prefs.memory.preview_cache_mb = 128;
++            session.prefs.memory.preview_cache_mb = 256;
 +            session.prefs.previews.cache_frames_when_idle = true;
-+            session.prefs.disk.disk_cache_enabled = false;
++            session.prefs.disk.disk_cache_enabled = true;
++            session.prefs.disk.disk_cache_max_gb = 1;
++            session.prefs.disk.disk_cache_folder = effectcraft_engine::render::disk_cache::default_folder().to_string_lossy().into_owned();
 +            session.prefs_changed();
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 3: 128 MiB preview cache, idle caching on. Diagnostics: cache size, quality and log.".to_string(),
++                Ok(_) => "Build 4: 256 MiB RAM + 1 GiB disk cache. Blue = disk, green = RAM. Controls in Diagnostics.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -329,7 +385,7 @@ index 00000000..1fea3d1b
 +    )
 +}
 diff --git a/apps/effectcraft-web/Cargo.toml b/apps/effectcraft-web/Cargo.toml
-index 6c30f9a5..ef49f78f 100644
+index 6c30f9a..ef49f78 100644
 --- a/apps/effectcraft-web/Cargo.toml
 +++ b/apps/effectcraft-web/Cargo.toml
 @@ -26,6 +26,7 @@ effectcraft-media = { workspace = true }
@@ -341,7 +397,7 @@ index 6c30f9a5..ef49f78f 100644
  eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
  log = { workspace = true }
 diff --git a/apps/effectcraft-web/js/host.js b/apps/effectcraft-web/js/host.js
-index 3db6ad35..cd7e509c 100644
+index 3db6ad3..cd7e509 100644
 --- a/apps/effectcraft-web/js/host.js
 +++ b/apps/effectcraft-web/js/host.js
 @@ -685,3 +685,46 @@ export function showDeviceLost(message, kept) {
@@ -392,7 +448,7 @@ index 3db6ad35..cd7e509c 100644
 +  bridge.runCommand(command);
 +}
 diff --git a/apps/effectcraft-web/src/api.rs b/apps/effectcraft-web/src/api.rs
-index 793e557c..37e836a7 100644
+index 793e557..37e836a 100644
 --- a/apps/effectcraft-web/src/api.rs
 +++ b/apps/effectcraft-web/src/api.rs
 @@ -83,6 +83,18 @@ pub fn add_file(name: String, data: js_sys::Uint8Array) -> String {
@@ -423,7 +479,7 @@ index 793e557c..37e836a7 100644
      v["workers"] = from_js(&crate::worker::stats());
      v["audio"] = from_js(&crate::audio::state());
 diff --git a/apps/effectcraft-web/src/app.rs b/apps/effectcraft-web/src/app.rs
-index 1a695240..70d18143 100644
+index 1a69524..70d1814 100644
 --- a/apps/effectcraft-web/src/app.rs
 +++ b/apps/effectcraft-web/src/app.rs
 @@ -15,6 +15,10 @@ use wasm_bindgen::prelude::*;
@@ -506,7 +562,7 @@ index 1a695240..70d18143 100644
          .await?;
 diff --git a/apps/effectcraft-web/src/fonts.rs b/apps/effectcraft-web/src/fonts.rs
 new file mode 100644
-index 00000000..7d39b717
+index 0000000..7d39b71
 --- /dev/null
 +++ b/apps/effectcraft-web/src/fonts.rs
 @@ -0,0 +1,80 @@
@@ -591,7 +647,7 @@ index 00000000..7d39b717
 +    app.session.revision = app.session.revision.saturating_add(1);
 +}
 diff --git a/apps/effectcraft-web/src/frames.rs b/apps/effectcraft-web/src/frames.rs
-index 523fd03c..74003339 100644
+index 523fd03..7400333 100644
 --- a/apps/effectcraft-web/src/frames.rs
 +++ b/apps/effectcraft-web/src/frames.rs
 @@ -116,13 +116,16 @@ impl WebFrames {
@@ -614,7 +670,7 @@ index 523fd03c..74003339 100644
              }
              let sync = w.mirror.sync(job.revision, &job.project);
 diff --git a/apps/effectcraft-web/src/lib.rs b/apps/effectcraft-web/src/lib.rs
-index 0d59906f..e5b356ae 100644
+index 0d59906..e5b356a 100644
 --- a/apps/effectcraft-web/src/lib.rs
 +++ b/apps/effectcraft-web/src/lib.rs
 @@ -37,6 +37,8 @@ pub mod diskcache;
@@ -627,7 +683,7 @@ index 0d59906f..e5b356ae 100644
  #[cfg(target_arch = "wasm32")]
  pub mod persist;
 diff --git a/apps/effectcraft-web/src/persist.rs b/apps/effectcraft-web/src/persist.rs
-index a2345cc3..efd4c777 100644
+index a2345cc..efd4c77 100644
 --- a/apps/effectcraft-web/src/persist.rs
 +++ b/apps/effectcraft-web/src/persist.rs
 @@ -236,6 +236,7 @@ pub fn register_media(pool: &effectcraft_media::MediaPool) -> usize {
@@ -639,7 +695,7 @@ index a2345cc3..efd4c777 100644
          {
              pool.add_bytes(&path, d);
 diff --git a/apps/effectcraft-web/src/worker.rs b/apps/effectcraft-web/src/worker.rs
-index bd86fd5d..d93989f5 100644
+index bd86fd5..d93989f 100644
 --- a/apps/effectcraft-web/src/worker.rs
 +++ b/apps/effectcraft-web/src/worker.rs
 @@ -59,9 +59,9 @@ impl Offload for WorkerOffload {
@@ -685,7 +741,7 @@ index bd86fd5d..d93989f5 100644
  /// A job worker's GPU (called once by `web/worker.js` after `workerInit`): with `gpu` and
 diff --git a/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js b/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js
 new file mode 100644
-index 00000000..4cff78f8
+index 0000000..4cff78f
 --- /dev/null
 +++ b/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js
 @@ -0,0 +1,460 @@
@@ -1150,7 +1206,7 @@ index 00000000..4cff78f8
 +  };
 +})();
 diff --git a/apps/effectcraft-web/web/index.html b/apps/effectcraft-web/web/index.html
-index 70ab93ff..19edc8a4 100644
+index 70ab93f..19edc8a 100644
 --- a/apps/effectcraft-web/web/index.html
 +++ b/apps/effectcraft-web/web/index.html
 @@ -38,11 +38,476 @@
@@ -1643,8 +1699,20 @@ index 70ab93ff..19edc8a4 100644
        addFile: async (fileOrUrl, name) => {
          let bytes;
          if (typeof fileOrUrl === "string") {
+diff --git a/crates/engine/src/commands/edit.rs b/crates/engine/src/commands/edit.rs
+index 06ba43b..27b5e57 100644
+--- a/crates/engine/src/commands/edit.rs
++++ b/crates/engine/src/commands/edit.rs
+@@ -790,6 +790,7 @@ pub(crate) fn disk_stats(s: &mut Session, _: &Value) -> Result<Value> {
+         "misses": st.misses,
+         "writes": st.writes,
+         "evictions": st.evictions,
++        "errors": st.errors,
+     }))
+ }
+ 
 diff --git a/crates/engine/src/commands/layer.rs b/crates/engine/src/commands/layer.rs
-index ca8aa865..8ab829df 100644
+index ca8aa86..8ab829d 100644
 --- a/crates/engine/src/commands/layer.rs
 +++ b/crates/engine/src/commands/layer.rs
 @@ -927,10 +927,40 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1751,7 +1819,7 @@ index ca8aa865..8ab829df 100644
                  }
              }
 diff --git a/crates/engine/src/logging.rs b/crates/engine/src/logging.rs
-index 2c89466a..c4f55179 100644
+index 2c89466..c4f5517 100644
 --- a/crates/engine/src/logging.rs
 +++ b/crates/engine/src/logging.rs
 @@ -278,6 +278,12 @@ impl Sink {
@@ -1767,8 +1835,23 @@ index 2c89466a..c4f55179 100644
      }
  }
  
+diff --git a/crates/engine/src/session_settings.rs b/crates/engine/src/session_settings.rs
+index 55c8e41..39cd42e 100644
+--- a/crates/engine/src/session_settings.rs
++++ b/crates/engine/src/session_settings.rs
+@@ -131,7 +131,9 @@ impl Session {
+                 }
+             },
+         };
+-        self.layer_cache.set_disk(Some((dc.clone(), footage_salt(&self.project))));
++        // The iPad preview persists final RGBA8 frames only. Intermediate float layers can
++        // be much larger and would add compression buffers to its limited RAM budget.
++        self.layer_cache.set_disk(if cfg!(target_os = "ios") { None } else { Some((dc.clone(), footage_salt(&self.project))) });
+         // Roto Brush / Object Matte segmentations persist there too (held weakly: switching the
+         // disk cache off drops it).
+         let store: std::sync::Arc<dyn effectcraft_effects::roto::SegStore> = dc.clone();
 diff --git a/crates/media/src/pool.rs b/crates/media/src/pool.rs
-index 98c70710..13b35eb0 100644
+index 98c7071..13b35eb 100644
 --- a/crates/media/src/pool.rs
 +++ b/crates/media/src/pool.rs
 @@ -45,6 +45,8 @@ struct Key {
@@ -1889,8 +1972,253 @@ index 98c70710..13b35eb0 100644
          let budget = 3 * (4096 + 64);
          for i in 0..10 {
              c.insert(k(i), img(), budget);
+diff --git a/crates/render/src/disk_cache.rs b/crates/render/src/disk_cache.rs
+index 4140b79..2f60d08 100644
+--- a/crates/render/src/disk_cache.rs
++++ b/crates/render/src/disk_cache.rs
+@@ -34,6 +34,9 @@ const MAGIC: &[u8; 4] = b"ECDC";
+ /// Pending writes before new ones are dropped.
+ #[cfg(not(target_arch = "wasm32"))]
+ const QUEUE_LIMIT: usize = 64;
++/// Bound retained compressed writes on iPad, independently of the entry count.
++const QUEUE_BYTES: usize = if cfg!(target_os = "ios") { 32 << 20 } else { usize::MAX };
++const MAX_FRAME_BYTES: usize = 128 << 20;
+ 
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+ pub enum Kind {
+@@ -80,6 +83,14 @@ pub struct DiskStats {
+     pub writes: u64,
+     pub evictions: u64,
+     pub dropped: u64,
++    pub errors: u64,
++}
++
++impl DiskStats {
++    /// Leave headroom for an in-flight frame instead of endlessly evicting and recaching.
++    pub fn can_prefetch(&self) -> bool {
++        self.errors == 0 && self.bytes < self.max_bytes.saturating_sub(self.max_bytes / 10)
++    }
+ }
+ 
+ struct Meta {
+@@ -219,6 +230,7 @@ enum Job {
+ struct Queue {
+     jobs: std::collections::VecDeque<Job>,
+     busy: bool,
++    bytes: usize,
+ }
+ 
+ pub struct DiskCache {
+@@ -230,6 +242,7 @@ pub struct DiskCache {
+     writes: AtomicU64,
+     evictions: AtomicU64,
+     dropped: AtomicU64,
++    errors: AtomicU64,
+     tmp_counter: AtomicU64,
+     queue: Arc<(Mutex<Queue>, Condvar)>,
+     /// Layer buffers that took less than this to render are not written (ms).
+@@ -273,7 +286,7 @@ fn checksum(data: &[u8]) -> u64 {
+ /// The platform's default disk cache folder.
+ pub fn default_folder() -> PathBuf {
+     let home = std::env::var_os("HOME").map(PathBuf::from);
+-    if cfg!(target_os = "macos")
++    if cfg!(any(target_os = "macos", target_os = "ios"))
+         && let Some(h) = &home
+     {
+         return h.join("Library/Caches/EffectCraft/Disk Cache");
+@@ -303,8 +316,9 @@ impl DiskCache {
+             writes: AtomicU64::new(0),
+             evictions: AtomicU64::new(0),
+             dropped: AtomicU64::new(0),
++            errors: AtomicU64::new(0),
+             tmp_counter: AtomicU64::new(0),
+-            queue: Arc::new((Mutex::new(Queue { jobs: Default::default(), busy: false }), Condvar::new())),
++            queue: Arc::new((Mutex::new(Queue { jobs: Default::default(), busy: false, bytes: 0 }), Condvar::new())),
+             min_layer_ms: AtomicU64::new(30),
+         });
+         dc.rescan();
+@@ -400,12 +414,14 @@ impl DiskCache {
+             writes: self.writes.load(Ordering::Relaxed),
+             evictions: self.evictions.load(Ordering::Relaxed),
+             dropped: self.dropped.load(Ordering::Relaxed),
++            errors: self.errors.load(Ordering::Relaxed),
+         }
+     }
+ 
+     /// Delete every entry (Edit ▸ Purge ▸ All Disk Cache / Empty Disk Cache).
+     pub fn clear(&self) {
+         self.flush();
++        self.errors.store(0, Ordering::Relaxed);
+         if let Ok(mut g) = self.index.lock() {
+             g.clear();
+         }
+@@ -436,6 +452,12 @@ impl DiskCache {
+             return None;
+         }
+         let path = self.path(kind, key);
++        if kind == Kind::Frame && std::fs::metadata(&path).is_ok_and(|m| m.len() > (MAX_FRAME_BYTES + MAX_FRAME_BYTES / 255 + 1024) as u64) {
++            self.misses.fetch_add(1, Ordering::Relaxed);
++            self.forget(kind, key);
++            let _ = std::fs::remove_file(&path);
++            return None;
++        }
+         let data = std::fs::read(&path).ok();
+         let ok = data.as_deref().and_then(|d| verify(d, kind));
+         match ok {
+@@ -478,10 +500,11 @@ impl DiskCache {
+         {
+             let (m, cv) = &*self.queue;
+             let Ok(mut q) = m.lock() else { return };
+-            if q.jobs.len() >= QUEUE_LIMIT {
++            if q.jobs.len() >= QUEUE_LIMIT || payload.len() > QUEUE_BYTES.saturating_sub(q.bytes) {
+                 self.dropped.fetch_add(1, Ordering::Relaxed);
+                 return;
+             }
++            q.bytes = q.bytes.saturating_add(payload.len());
+             q.jobs.push_back(Job::Write(kind, key, payload));
+             cv.notify_all();
+         }
+@@ -494,17 +517,20 @@ impl DiskCache {
+         }
+         let path = self.path(kind, key);
+         let Some(parent) = path.parent() else { return };
+-        if std::fs::create_dir_all(parent).is_err() {
++        if let Err(error) = std::fs::create_dir_all(parent) {
++            self.write_error(&error);
+             return;
+         }
+         let data = seal(kind, payload);
+         let n = self.tmp_counter.fetch_add(1, Ordering::Relaxed);
+         let tmp = parent.join(format!("{key:032x}.tmp.{}.{n}", std::process::id()));
+-        if std::fs::write(&tmp, &data).is_err() {
++        if let Err(error) = std::fs::write(&tmp, &data) {
++            self.write_error(&error);
+             let _ = std::fs::remove_file(&tmp);
+             return;
+         }
+-        if std::fs::rename(&tmp, &path).is_err() {
++        if let Err(error) = std::fs::rename(&tmp, &path) {
++            self.write_error(&error);
+             let _ = std::fs::remove_file(&tmp);
+             return;
+         }
+@@ -515,6 +541,12 @@ impl DiskCache {
+         self.evict();
+     }
+ 
++    fn write_error(&self, error: &std::io::Error) {
++        if self.errors.fetch_add(1, Ordering::Relaxed) == 0 {
++            log::error!("Disk cache write failed: {error}. Preview can continue using RAM.");
++        }
++    }
++
+     /// Remove least recently used entries until the cache fits its limit.
+     fn evict(&self) {
+         let max = self.max_bytes();
+@@ -532,12 +564,20 @@ impl DiskCache {
+ 
+     pub fn get_frame(&self, key: u128) -> Option<Frame8> {
+         let p = self.read(Kind::Frame, key)?;
+-        decode_frame(&p)
++        let decoded = decode_frame(&p);
++        if decoded.is_none() {
++            self.hits.fetch_sub(1, Ordering::Relaxed);
++            self.misses.fetch_add(1, Ordering::Relaxed);
++            self.forget(Kind::Frame, key);
++            let _ = std::fs::remove_file(self.path(Kind::Frame, key));
++        }
++        decoded
+     }
+ 
+     /// Queue a frame for writing (8-bit premultiplied RGBA, `width * height * 4` bytes).
+     pub fn put_frame(&self, key: u128, width: u32, height: u32, rgba: &[u8]) {
+-        if self.contains(Kind::Frame, key) || rgba.len() != width as usize * height as usize * 4 {
++        let expected = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4));
++        if self.contains(Kind::Frame, key) || width == 0 || height == 0 || expected != Some(rgba.len()) || rgba.len() > MAX_FRAME_BYTES {
+             return;
+         }
+         self.enqueue(Kind::Frame, key, encode_frame(width, height, rgba));
+@@ -591,6 +631,8 @@ fn writer(dc: std::sync::Weak<DiskCache>, q: Arc<(Mutex<Queue>, Condvar)>) {
+             let Ok(mut g) = m.lock() else { return };
+             loop {
+                 if let Some(j) = g.jobs.pop_front() {
++                    let Job::Write(_, _, payload) = &j;
++                    g.bytes = g.bytes.saturating_sub(payload.len());
+                     g.busy = true;
+                     break j;
+                 }
+@@ -715,8 +757,13 @@ fn decode_frame(p: &[u8]) -> Option<Frame8> {
+     }
+     let w = u32::from_le_bytes(p[0..4].try_into().ok()?);
+     let h = u32::from_le_bytes(p[4..8].try_into().ok()?);
++    let expected = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
++    let declared = u32::from_le_bytes(p.get(8..12)?.try_into().ok()?) as usize;
++    if w == 0 || h == 0 || expected > MAX_FRAME_BYTES || declared != expected {
++        return None;
++    }
+     let rgba = lz4_flex::decompress_size_prepended(&p[8..]).ok()?;
+-    (rgba.len() == w as usize * h as usize * 4).then_some(Frame8 { width: w, height: h, rgba })
++    (rgba.len() == expected).then_some(Frame8 { width: w, height: h, rgba })
+ }
+ 
+ fn encode_layer(b: &Buf) -> Vec<u8> {
+@@ -880,6 +927,54 @@ pub fn frame_key(content: u128, frame: i64, scale_milli: u32, view: u64) -> u128
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn prefetch_stops_before_storage_is_full_or_after_a_write_error() {
++        let mut s = DiskStats { max_bytes: 1000, bytes: 899, ..Default::default() };
++        assert!(s.can_prefetch());
++        s.bytes = 900;
++        assert!(!s.can_prefetch());
++        s.bytes = 0;
++        s.errors = 1;
++        assert!(!s.can_prefetch());
++        assert!(!DiskStats::default().can_prefetch());
++    }
++
++    #[test]
++    fn invalid_frame_lengths_are_rejected_before_decompression() {
++        let mut payload = encode_frame(2, 2, &[1; 16]);
++        payload[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
++        assert!(decode_frame(&payload).is_none());
++        payload[..4].copy_from_slice(&u32::MAX.to_le_bytes());
++        payload[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
++        assert!(decode_frame(&payload).is_none());
++        assert!(decode_frame(&encode_frame(0, 1, &[])).is_none());
++        let dir = tmpdir("invalid-length");
++        let dc = DiskCache::open(&dir, 1 << 20).unwrap();
++        // Even a valid outer checksum cannot make a malformed frame remain a false hit.
++        dc.write_now(Kind::Frame, 1, &payload);
++        assert!(dc.contains(Kind::Frame, 1));
++        assert!(dc.get_frame(1).is_none());
++        assert!(!dc.contains(Kind::Frame, 1));
++        assert!(!dc.path(Kind::Frame, 1).exists());
++        let _ = std::fs::remove_dir_all(dir);
++    }
++
++    #[test]
++    fn write_failures_are_reported_and_leave_no_partial_frame() {
++        let dir = tmpdir("write-error");
++        let dc = DiskCache::open(&dir, 1 << 20).unwrap();
++        let path = dc.path(Kind::Frame, 1);
++        let parent = path.parent().unwrap();
++        std::fs::create_dir_all(parent.parent().unwrap()).unwrap();
++        std::fs::write(parent, b"blocked shard").unwrap();
++        dc.put_frame_now(1, 2, 2, &[1; 16]);
++        assert_eq!(dc.stats().errors, 1);
++        assert!(!dc.stats().can_prefetch());
++        assert!(!dc.contains(Kind::Frame, 1));
++        assert_eq!(dc.stats().writes, 0);
++        let _ = std::fs::remove_dir_all(dir);
++    }
++
+     fn tmpdir(name: &str) -> PathBuf {
+         let d = std::env::temp_dir().join(format!("effectcraft-disk-cache-{name}-{}", std::process::id()));
+         let _ = std::fs::remove_dir_all(&d);
 diff --git a/crates/text/src/fonts.rs b/crates/text/src/fonts.rs
-index d555954c..493b9340 100644
+index d555954..493b934 100644
 --- a/crates/text/src/fonts.rs
 +++ b/crates/text/src/fonts.rs
 @@ -336,10 +336,34 @@ pub fn add_font_data(data: Vec<u8>) -> Vec<FaceId> {
@@ -1954,7 +2282,7 @@ index d555954c..493b9340 100644
  }
  
 diff --git a/crates/text/src/layout.rs b/crates/text/src/layout.rs
-index c1503215..be6f1b4f 100644
+index c150321..be6f1b4 100644
 --- a/crates/text/src/layout.rs
 +++ b/crates/text/src/layout.rs
 @@ -1028,6 +1028,10 @@ pub fn layout_rich_uncached(text: &str, runs: &[(Range<usize>, TextStyle)], para
@@ -1969,7 +2297,7 @@ index c1503215..be6f1b4f 100644
      static C: OnceLock<Mutex<HashMap<u64, (u64, Arc<Layout>)>>> = OnceLock::new();
      C.get_or_init(Default::default)
 diff --git a/crates/ui-egui/src/frames.rs b/crates/ui-egui/src/frames.rs
-index 059bc3a0..f680e744 100644
+index 059bc3a..d4bfe22 100644
 --- a/crates/ui-egui/src/frames.rs
 +++ b/crates/ui-egui/src/frames.rs
 @@ -40,9 +40,19 @@ const MAX_KEEPERS: usize = 64;
@@ -2032,7 +2360,33 @@ index 059bc3a0..f680e744 100644
              ctx: None,
              last_ms: Arc::new(Mutex::new(0.0)),
              content_keys: Arc::default(),
-@@ -830,11 +850,16 @@ impl Frames {
+@@ -742,6 +762,25 @@ impl Frames {
+         self.cache.lock().map(|c| c.map.contains_key(k)).unwrap_or(false)
+     }
+ 
++    /// Index-only lookup; file reads and decompression remain on the frame worker.
++    pub fn is_cached_on_disk(&self, src: &RenderSource, key: &FrameKey) -> bool {
++        #[cfg(target_arch = "wasm32")]
++        {
++            let _ = (src, key);
++            false
++        }
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let Some(dc) = &src.disk else { return false };
++            let content = self.content_keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&(key.revision, key.comp)).copied();
++            let Some(content) = content else {
++                self.request_content_key(src.project.clone(), key.revision, key.comp);
++                return false;
++            };
++            dc.contains(disk_cache::Kind::Frame, disk_cache::frame_key(content, key.frame, key.scale, key.view ^ key.opts))
++        }
++    }
++
+     pub fn inflight(&self) -> usize {
+         self.inflight.lock().map(|s| s.len()).unwrap_or(0)
+     }
+@@ -830,11 +869,16 @@ impl Frames {
      /// frames when it shrinks.
      pub fn set_budget(&self, bytes: usize) {
          if let Ok(mut c) = self.cache.lock() {
@@ -2050,7 +2404,7 @@ index 059bc3a0..f680e744 100644
      pub fn budget(&self) -> usize {
          self.cache.lock().map(|c| c.budget).unwrap_or(0)
      }
-@@ -1147,6 +1172,8 @@ impl Worker {
+@@ -1147,6 +1191,8 @@ impl Worker {
              job
          };
          let t0 = web_time::Instant::now();
@@ -2059,7 +2413,7 @@ index 059bc3a0..f680e744 100644
          let disk = job.src.disk.as_ref().map(|dc| (dc.clone(), frame_disk_key(content_keys, &job.src.project, &job.key, opts_hash(&job.opts))));
          let from_disk = disk.as_ref().and_then(|(dc, k)| dc.get_frame(*k));
          let disk_hit = from_disk.is_some();
-@@ -1157,6 +1184,8 @@ impl Worker {
+@@ -1157,14 +1203,38 @@ impl Worker {
                  // Called off (frames it read may be missing) or failed: not cached, and not
                  // "in progress" forever: the viewer asks for it again.
                  None => {
@@ -2068,20 +2422,102 @@ index 059bc3a0..f680e744 100644
                      self.release(job.key, job.urgent);
                      return true;
                  }
-@@ -1165,6 +1194,11 @@ impl Worker {
+             },
+         };
++        // Final textures must become RGBA8 pixels before iPad persistence. Read back on the
++        // existing render worker, retaining neither a second GPU cache nor extra render jobs.
++        #[cfg(target_os = "ios")]
++        let ci = if disk.is_some() {
++            match ci {
++                FrameImage::Gpu(ref image) => job
++                    .src
++                    .gpu
++                    .as_ref()
++                    .and_then(|g| g.read_display(image))
++                    .map(|rgba| FrameImage::Cpu(Arc::new(egui::ColorImage::from_rgba_premultiplied([image.width as usize, image.height as usize], &rgba))))
++                    .unwrap_or_else(|| self.render_job(&job, false)),
++                image => image,
++            }
++        } else {
++            ci
++        };
          // Publish the shared frame and wake the viewer before optional RGBA conversion
          // and compression. Persistence still runs on this worker, using the same snapshot.
          self.finish(&job, ci.clone(), t0);
 +        #[cfg(target_os = "ios")]
 +        {
 +            let stats = self.cache.lock().ok().map(|c| (c.bytes, c.gpu_bytes, c.map.len()));
-+            log::info!(target: "effectcraft_diagnostics", "frame_done frame={} ms={:.1} cache_total_gpu_count={stats:?}", job.key.frame, t0.elapsed().as_secs_f64() * 1000.0);
++            log::info!(target: "effectcraft_diagnostics", "frame_done frame={} ms={:.1} disk_hit={} cache_total_gpu_count={stats:?}", job.key.frame, t0.elapsed().as_secs_f64() * 1000.0, disk_hit);
 +        }
          if !disk_hit && let (Some((dc, k)), FrameImage::Cpu(img)) = (&disk, &ci) {
              let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
              dc.put_frame(*k, img.size[0] as u32, img.size[1] as u32, &rgba);
+@@ -1375,6 +1445,63 @@ impl Queue {
+ mod tests {
+     use super::*;
+ 
++    #[cfg(not(target_arch = "wasm32"))]
++    #[test]
++    fn disk_frames_remain_available_beyond_ram_and_after_relaunch() {
++        let dir = std::env::temp_dir().join(format!("ec-ipad-disk-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&dir);
++        let dc = DiskCache::open(&dir, 1 << 20).unwrap();
++        let project = Arc::new(Project::default());
++        let content = disk_cache::comp_content_key(&project, ItemId(1));
++        let f = Frames::default();
++        f.set_budget(16); // Only one 2x2 frame fits in RAM.
++        f.content_keys.lock().unwrap().insert((1, 1), content);
++        let src = RenderSource {
++            project,
++            footage: Arc::new(effectcraft_engine::render::NoFootage),
++            expr: None,
++            layer_cache: Arc::default(),
++            gpu: None,
++            gpu_display: false,
++            disk: Some(dc.clone()),
++        };
++        for frame in 0..6 {
++            let k = key(1, frame, 0);
++            insert(&f, k);
++            let disk_key = disk_cache::frame_key(content, frame, k.scale, k.view ^ k.opts);
++            dc.put_frame_now(disk_key, 2, 2, &[frame as u8; 16]);
++        }
++        assert_eq!(f.cache_usage().unwrap().frames, 1);
++        assert!(!f.is_cached(&key(1, 0, 0)));
++        assert!((0..6).all(|frame| f.is_cached_on_disk(&src, &key(1, frame, 0))));
++        // Quality, render options and project content cannot reuse the wrong pixels.
++        assert!(!f.is_cached_on_disk(&src, &FrameKey { scale: 500, ..key(1, 0, 0) }));
++        assert!(!f.is_cached_on_disk(&src, &FrameKey { opts: 99, ..key(1, 0, 0) }));
++        // A disk hit must actually restore the pixels on the worker, without rendering this
++        // deliberately empty project (which has no comp 1 to render).
++        let opts = RenderOpts::default();
++        let restored = key(1, 7, opts_hash(&opts));
++        let stored = disk_cache::frame_key(content, restored.frame, restored.scale, restored.opts);
++        dc.put_frame_now(stored, 2, 2, &[42; 16]);
++        f.request_with(&src, restored, ItemId(1), Tick::ZERO, opts, true);
++        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
++        while f.inflight() > 0 {
++            assert!(std::time::Instant::now() < until);
++            std::thread::sleep(std::time::Duration::from_millis(1));
++        }
++        let FrameImage::Cpu(pixels) = f.get(&restored).unwrap() else { panic!("disk frame should be CPU pixels") };
++        assert_eq!(pixels.pixels[0].to_array(), [42; 4]);
++        assert!(dc.stats().hits > 0);
++        f.content_keys.lock().unwrap().insert((1, 1), content.wrapping_add(1));
++        assert!(!f.is_cached_on_disk(&src, &key(1, 0, 0)));
++        let reopened = DiskCache::open(&dir, 1 << 20).unwrap();
++        let first = disk_cache::frame_key(content, 0, key(1, 0, 0).scale, 0);
++        assert_eq!(reopened.get_frame(first).unwrap().rgba, vec![0; 16]);
++        reopened.clear();
++        assert_eq!(reopened.stats().entries, 0);
++        let _ = std::fs::remove_dir_all(dir);
++    }
++
+     #[cfg(not(target_arch = "wasm32"))]
+     #[test]
+     fn disk_indicator_does_not_hash_on_ui_thread_and_coalesces_edits() {
 diff --git a/crates/ui-egui/src/header.rs b/crates/ui-egui/src/header.rs
-index fb381cfd..9bd1cfb9 100644
+index fb381cf..9bd1cfb 100644
 --- a/crates/ui-egui/src/header.rs
 +++ b/crates/ui-egui/src/header.rs
 @@ -1,15 +1,14 @@
@@ -2156,7 +2592,7 @@ index fb381cfd..9bd1cfb9 100644
      let (icon, mode) = match app.session.prefs.appearance.appearance_mode.as_str() {
          "auto" => (Icon::Monitor, tr("Sync with System")),
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 105a075e..fd368f04 100644
+index 105a075..9808c7f 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
 @@ -144,6 +144,9 @@ pub struct Hooks {
@@ -2169,8 +2605,65 @@ index 105a075e..fd368f04 100644
      pub pick_files: Option<Box<dyn Fn(&[&str]) -> Vec<String>>>,
      pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
      pub pick_open_project: Option<Box<dyn Fn() -> Option<String>>>,
+@@ -1192,6 +1195,7 @@ impl EffectcraftApp {
+         };
+         let mut queued = self.frames.inflight();
+         let series = self.frame_series(cid, scale);
++        let disk_source = (cfg!(target_os = "ios") && self.session.disk_cache.is_some()).then(|| self.render_source());
+         // The preview's position orders prefetch and eviction (#595).
+         let playhead = plan.filter(|p| p.video).map(|p| frames::Playhead { series, cur, start: p.start, end: p.end, step: p.step, looping: p.looping });
+         self.frames.set_playhead(playhead);
+@@ -1204,7 +1208,17 @@ impl EffectcraftApp {
+             let mut all = true;
+             let n = (p.end - p.start) / p.step + 1;
+             let fit = self.frames_that_fit(&c, scale);
+-            if n > fit {
++            // iPad can cache a longer range on disk. Stop extending when storage is nearly
++            // full or a write failed; RAM-only previews keep their existing bounded range.
++            let disk_range = n <= 100_000
++                && disk_source.as_ref().is_some_and(|src| {
++                    src.disk.as_ref().is_some_and(|dc| dc.stats().can_prefetch())
++                        || (0..n).filter_map(|k| p.frame_after(p.first, k)).all(|f| {
++                            let key = FrameKey { frame: f, ..series };
++                            self.frames.is_cached(&key) || self.frames.is_cached_on_disk(src, &key)
++                        })
++                });
++            if n > fit && !disk_range {
+                 let mut cut = p;
+                 (cut.start, cut.end) = (p.first, (p.first + (fit - 1) * p.step).min(p.end));
+                 self.playback.plan = Some(cut);
+@@ -1214,7 +1228,8 @@ impl EffectcraftApp {
+             }
+             let order: Vec<i64> = (0..n).filter_map(|k| p.frame_after(p.first, k)).collect();
+             for f in order {
+-                if self.frames.is_cached(&FrameKey { frame: f, ..series }) {
++                let key = FrameKey { frame: f, ..series };
++                if self.frames.is_cached(&key) || disk_source.as_ref().is_some_and(|src| self.frames.is_cached_on_disk(src, &key)) {
+                     continue;
+                 }
+                 all = false;
+@@ -1407,14 +1422,17 @@ impl EffectcraftApp {
+             return;
+         }
+         let cur = comp.frame_rate.frame_at(self.session.time()).clamp(wa, wb);
+-        let fit = self.frames_that_fit(comp, series.scale as f64 / 1000.0).min(n);
++        let disk_source = (cfg!(target_os = "ios") && self.session.disk_cache.is_some()).then(|| self.render_source());
++        let extend = disk_source.as_ref().and_then(|src| src.disk.as_ref()).is_some_and(|dc| dc.stats().can_prefetch());
++        let fit = if extend { n.min(100_000) } else { self.frames_that_fit(comp, series.scale as f64 / 1000.0).min(n) };
+         let slots = (self.frames_parallelism() / 2).max(1);
+         let mut queued = self.frames.inflight();
+         let scale = series.scale as f64 / 1000.0;
+         let mut pending = false;
+         for k in 0..fit {
+             let f = wa + (cur - wa + k).rem_euclid(n);
+-            if self.frames.is_cached(&FrameKey { frame: f, ..*series }) {
++            let key = FrameKey { frame: f, ..*series };
++            if self.frames.is_cached(&key) || disk_source.as_ref().is_some_and(|src| self.frames.is_cached_on_disk(src, &key)) {
+                 continue;
+             }
+             pending = true;
 diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
-index 8b5fd1c3..6c5d8bd7 100644
+index 8b5fd1c..6c5d8bd 100644
 --- a/crates/ui-egui/src/menus.rs
 +++ b/crates/ui-egui/src/menus.rs
 @@ -12,6 +12,57 @@ use crate::dock::PanelKind;
@@ -2418,7 +2911,7 @@ index 8b5fd1c3..6c5d8bd7 100644
      fn every_ui_shortcut_parses() {
          for c in UI_COMMANDS {
 diff --git a/crates/ui-egui/src/panels/text_panels.rs b/crates/ui-egui/src/panels/text_panels.rs
-index ae2294f1..7436fbe0 100644
+index ae2294f..7436fbe 100644
 --- a/crates/ui-egui/src/panels/text_panels.rs
 +++ b/crates/ui-egui/src/panels/text_panels.rs
 @@ -593,6 +593,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
@@ -2476,7 +2969,7 @@ index ae2294f1..7436fbe0 100644
                                  let pts: Vec<egui::Pos2> =
                                      poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
-index 163e6507..3d875706 100644
+index 163e650..3d87570 100644
 --- a/crates/ui-egui/src/panels/timeline.rs
 +++ b/crates/ui-egui/src/panels/timeline.rs
 @@ -72,7 +72,7 @@ pub(crate) fn bar_color(label: Color32, selected: bool) -> Color32 {
@@ -2564,7 +3057,7 @@ index 163e6507..3d875706 100644
      if let (Some(start), Some(end)) = (ctx.input(|i| i.pointer.press_origin()), outline_empty.interact_pointer_pos())
          && outline_empty.dragged()
 diff --git a/xtask/src/main.rs b/xtask/src/main.rs
-index 4d541feb..c8af9c02 100644
+index 4d541fe..c8af9c0 100644
 --- a/xtask/src/main.rs
 +++ b/xtask/src/main.rs
 @@ -60,6 +60,7 @@ const LAYERS: &[(&str, u8)] = &[

@@ -1,6 +1,32 @@
 # EffectCraft native iPad preview
 
-## Preview build 3
+## Preview build 4: disk-backed previews
+
+The user confirmed smooth cached playback at 256 MiB in build 3; Quarter fit the
+whole demo, while Half and Full exhausted the RAM limit. Build 4 starts with
+256 MiB RAM and a 1 GiB persistent disk cache. One render worker and the 64 MiB
+layer/media caches are unchanged.
+
+In **Diagnostics · build 4**, choose a 1/2/4 GiB disk limit, disable disk caching,
+clear cached files, or inspect frame count, stored bytes, reads and writes.
+Green on the timeline means RAM; blue means disk-only. Leave playback paused
+for idle caching to fill beyond the RAM window, then play. Frames are read and
+decompressed on the frame worker. GPU frames are read back there before saving.
+The cache lives in the app's `Library/Caches/EffectCraft/Disk Cache`, survives
+relaunch, and may be reclaimed by iPadOS. Settings start at 256 MiB / 1 GiB on
+each launch. New projects, edits, quality and view changes use different keys.
+
+Only final preview frames are persisted on iPad; float layer buffers remain in
+RAM. The compressed write queue has a 32 MiB limit. Idle filling pauses near
+90% of the disk budget or after a write error, avoiding endless cache eviction.
+When a caching preview cannot fit on disk either, it falls back to a RAM-sized
+range. A full filesystem reports write failures and leaves RAM preview usable.
+Disk playback speed and memory behavior still need testing on the actual iPad.
+
+The output is `EffectCraft-Native-Preview-4.ipa`, bundle build number 4, with the
+same native preview identifier. Install it over the previous preview in LiveContainer.
+
+## Preview build 3 history
 
 Build 2 was reported to play without exiting on the test iPad. Its 64 MiB preview
 cache held only eight full-HD RGBA8 frames, so old frames were quickly evicted.
@@ -50,7 +76,7 @@ installation and audio output are not yet connected in this frontend.
 Push this build repository to GitHub. The first push starts the build automatically;
 later builds can also be started with **Actions → Native iPad preview → Run workflow**.
 The standard `macos-15` runner builds an unsigned ARM64 iOS executable and packages
-`EffectCraft-Native-Preview-3.ipa` as an Actions artifact. No Apple signing key is needed
+`EffectCraft-Native-Preview-4.ipa` as an Actions artifact. No Apple signing key is needed
 for this unsigned output. Previous builds launched in LiveContainer on the test iPad.
 The preview uses `com.effectcraft.ipad.nativepreview`, separate from the stable app.
 
