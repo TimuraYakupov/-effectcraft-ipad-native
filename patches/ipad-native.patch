@@ -1973,7 +1973,7 @@ index 98c7071..13b35eb 100644
          for i in 0..10 {
              c.insert(k(i), img(), budget);
 diff --git a/crates/render/src/disk_cache.rs b/crates/render/src/disk_cache.rs
-index 4140b79..2f60d08 100644
+index 4140b79..a12fae7 100644
 --- a/crates/render/src/disk_cache.rs
 +++ b/crates/render/src/disk_cache.rs
 @@ -34,6 +34,9 @@ const MAGIC: &[u8; 4] = b"ECDC";
@@ -2065,8 +2065,16 @@ index 4140b79..2f60d08 100644
          let data = std::fs::read(&path).ok();
          let ok = data.as_deref().and_then(|d| verify(d, kind));
          match ok {
-@@ -478,10 +500,11 @@ impl DiskCache {
+@@ -476,12 +498,19 @@ impl DiskCache {
+         }
+         #[cfg(not(target_arch = "wasm32"))]
          {
++            // A single large frame must not be dropped forever merely because it cannot
++            // fit in the background queue. Its caller is the existing frame worker.
++            if payload.len() > QUEUE_BYTES {
++                self.write_now(kind, key, &payload);
++                return;
++            }
              let (m, cv) = &*self.queue;
              let Ok(mut q) = m.lock() else { return };
 -            if q.jobs.len() >= QUEUE_LIMIT {
@@ -2078,7 +2086,7 @@ index 4140b79..2f60d08 100644
              q.jobs.push_back(Job::Write(kind, key, payload));
              cv.notify_all();
          }
-@@ -494,17 +517,20 @@ impl DiskCache {
+@@ -494,17 +523,20 @@ impl DiskCache {
          }
          let path = self.path(kind, key);
          let Some(parent) = path.parent() else { return };
@@ -2102,7 +2110,7 @@ index 4140b79..2f60d08 100644
              let _ = std::fs::remove_file(&tmp);
              return;
          }
-@@ -515,6 +541,12 @@ impl DiskCache {
+@@ -515,6 +547,12 @@ impl DiskCache {
          self.evict();
      }
  
@@ -2115,7 +2123,7 @@ index 4140b79..2f60d08 100644
      /// Remove least recently used entries until the cache fits its limit.
      fn evict(&self) {
          let max = self.max_bytes();
-@@ -532,12 +564,20 @@ impl DiskCache {
+@@ -532,12 +570,20 @@ impl DiskCache {
  
      pub fn get_frame(&self, key: u128) -> Option<Frame8> {
          let p = self.read(Kind::Frame, key)?;
@@ -2138,7 +2146,7 @@ index 4140b79..2f60d08 100644
              return;
          }
          self.enqueue(Kind::Frame, key, encode_frame(width, height, rgba));
-@@ -591,6 +631,8 @@ fn writer(dc: std::sync::Weak<DiskCache>, q: Arc<(Mutex<Queue>, Condvar)>) {
+@@ -591,6 +637,8 @@ fn writer(dc: std::sync::Weak<DiskCache>, q: Arc<(Mutex<Queue>, Condvar)>) {
              let Ok(mut g) = m.lock() else { return };
              loop {
                  if let Some(j) = g.jobs.pop_front() {
@@ -2147,7 +2155,7 @@ index 4140b79..2f60d08 100644
                      g.busy = true;
                      break j;
                  }
-@@ -715,8 +757,13 @@ fn decode_frame(p: &[u8]) -> Option<Frame8> {
+@@ -715,8 +763,13 @@ fn decode_frame(p: &[u8]) -> Option<Frame8> {
      }
      let w = u32::from_le_bytes(p[0..4].try_into().ok()?);
      let h = u32::from_le_bytes(p[4..8].try_into().ok()?);
@@ -2162,7 +2170,7 @@ index 4140b79..2f60d08 100644
  }
  
  fn encode_layer(b: &Buf) -> Vec<u8> {
-@@ -880,6 +927,54 @@ pub fn frame_key(content: u128, frame: i64, scale_milli: u32, view: u64) -> u128
+@@ -880,6 +933,54 @@ pub fn frame_key(content: u128, frame: i64, scale_milli: u32, view: u64) -> u128
  mod tests {
      use super::*;
  

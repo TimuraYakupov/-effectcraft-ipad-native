@@ -22,6 +22,8 @@ RAM. The compressed write queue has a 32 MiB limit. Idle filling pauses near
 When a caching preview cannot fit on disk either, it falls back to a RAM-sized
 range. A full filesystem reports write failures and leaves RAM preview usable.
 Disk playback speed and memory behavior still need testing on the actual iPad.
+An individual compressed frame larger than the queue is written directly by the
+frame worker rather than repeatedly dropped; it never blocks the UI thread.
 
 The output is `EffectCraft-Native-Preview-4.ipa`, bundle build number 4, with the
 same native preview identifier. Install it over the previous preview in LiveContainer.

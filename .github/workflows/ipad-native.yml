@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: native-ipad-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-ipad:
     runs-on: macos-15
