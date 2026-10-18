@@ -1,6 +1,23 @@
 # EffectCraft native iPad preview
 
-## Diagnostic build 2
+## Preview build 3
+
+Build 2 was reported to play without exiting on the test iPad. Its 64 MiB preview
+cache held only eight full-HD RGBA8 frames, so old frames were quickly evicted.
+Build 3 starts with 128 MiB and restores idle caching, keeping one frame worker.
+Open **Diagnostics · build 3** to select 64, 128 or 256 MiB, inspect actual retained
+frames and bytes, toggle idle caching, or choose Full/Half/Quarter preview quality.
+Changing the limit or quality stops playback. Half uses roughly one quarter of
+Full's frame memory; Quarter uses one sixteenth. These controls affect preview,
+not export resolution. The safe startup limit resets to 128 MiB on each launch.
+
+The preview limit includes CPU and GPU frame pixels together; layer and media
+caches remain 64 MiB each. Total process memory and temporary rendering buffers
+can exceed those limits. Larger limits still need testing on the device.
+The output is `EffectCraft-Native-Preview-3.ipa`, bundle build number 3, with the
+same preview identifier as build 2.
+
+## Diagnostic build 2 history
 
 The first native preview launched on an iPad, but exited during preview caching.
 The cause is unconfirmed. This diagnostic build requests one frame worker with
@@ -33,8 +50,8 @@ installation and audio output are not yet connected in this frontend.
 Push this build repository to GitHub. The first push starts the build automatically;
 later builds can also be started with **Actions → Native iPad preview → Run workflow**.
 The standard `macos-15` runner builds an unsigned ARM64 iOS executable and packages
-`EffectCraft-Native-Preview.ipa` as an Actions artifact. No Apple signing key is needed
-for this unsigned output. The first install/start in LiveContainer remains unverified.
+`EffectCraft-Native-Preview-3.ipa` as an Actions artifact. No Apple signing key is needed
+for this unsigned output. Previous builds launched in LiveContainer on the test iPad.
 The preview uses `com.effectcraft.ipad.nativepreview`, separate from the stable app.
 
 For a local Mac: install Rust 1.95.0 with `aarch64-apple-ios`, run the source preparation

@@ -57,10 +57,10 @@ index 00000000..4d925267
 +winit = { version = "0.30", default-features = false }
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..18abfa78
+index 00000000..e51c1fbb
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,135 @@
 +//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
 +use std::path::PathBuf;
 +
@@ -78,6 +78,15 @@ index 00000000..18abfa78
 +}
 +
 +impl DiagnosticApp {
++    fn set_cache(&mut self, mib: u32) {
++        let mib = mib.clamp(64, 256);
++        self.app.stop();
++        self.app.session.prefs.memory.preview_cache_mb = mib;
++        self.app.session.prefs_changed();
++        self.app.frames.set_budget((mib as usize) << 20);
++        log::info!(target: "effectcraft_diagnostics", "preview_cache_limit_mib={mib}");
++    }
++
 +    fn refresh(&mut self) {
 +        let name = if self.previous { "effectcraft.1.log" } else { "effectcraft.log" };
 +        self.text = crate::journal::read_tail(&self.directory.join(name)).unwrap_or_else(|e| format!("Cannot read {name}: {e}"));
@@ -104,15 +113,55 @@ index 00000000..18abfa78
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 2").clicked() {
++                if ui.button("Diagnostics · build 3").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
 +            let mut open = self.open;
-+            egui::Window::new("iPad diagnostics · build 2").open(&mut open).default_width(620.0).show(ctx, |ui| {
-+                ui.label("One render worker · CPU/layer/media/GPU frame caches: 64 MiB each");
++            egui::Window::new("iPad preview & diagnostics · build 3").open(&mut open).default_width(650.0).show(ctx, |ui| {
++                ui.label("One render worker · layer/media caches: 64 MiB each");
++                ui.horizontal(|ui| {
++                    ui.label("Preview cache:");
++                    let current = self.app.frames.budget() >> 20;
++                    for mib in [64_u32, 128, 256] {
++                        if ui.selectable_label(current == mib as usize, format!("{mib} MiB")).clicked() {
++                            self.set_cache(mib);
++                        }
++                    }
++                });
++                if let Some(c) = self.app.frames.cache_usage() {
++                    ui.label(format!(
++                        "Cached: {} frames · {:.1} / {:.0} MiB total (GPU: {:.1} MiB)",
++                        c.frames,
++                        c.bytes as f64 / 1048576.0,
++                        c.budget as f64 / 1048576.0,
++                        c.gpu_bytes as f64 / 1048576.0
++                    ));
++                }
++                let mut idle = self.app.session.prefs.previews.cache_frames_when_idle;
++                if ui.checkbox(&mut idle, "Cache frames while idle").changed() {
++                    self.app.session.prefs.previews.cache_frames_when_idle = idle;
++                    self.app.session.prefs_changed();
++                    log::info!(target: "effectcraft_diagnostics", "idle_cache={idle}");
++                }
++                ui.horizontal(|ui| {
++                    ui.label("Preview quality:");
++                    use effectcraft_ui_egui::state::Resolution;
++                    for (resolution, command) in
++                        [(Resolution::Full, "view.res.full"), (Resolution::Half, "view.res.half"), (Resolution::Quarter, "view.res.quarter")]
++                    {
++                        if ui.selectable_label(self.app.viewer_res() == resolution, resolution.label()).clicked() {
++                            self.app.stop();
++                            if let Err(error) = effectcraft_ui_egui::menus::invoke(&mut self.app, ctx, command, serde_json::json!({})) {
++                                self.app.ui.status = error;
++                            }
++                        }
++                    }
++                });
++                ui.label("Half fits about 4× more frames; Quarter about 16×. Quality changes affect preview only.");
++                ui.separator();
 +                ui.label("After a crash, relaunch once and select Previous run. The last two runs are kept.");
 +                if let Some(error) = &self.startup_error {
 +                    ui.colored_label(egui::Color32::RED, format!("Log setup failed: {error}"));
@@ -196,7 +245,7 @@ index 00000000..536a1b26
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..edbd32ce
+index 00000000..1fea3d1b
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
 @@ -0,0 +1,79 @@
@@ -214,7 +263,7 @@ index 00000000..edbd32ce
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=2 startup one_worker=1 caches_mib=64 gpu_frames_mib=64");
++    log::info!(target: "effectcraft_diagnostics", "build=3 startup workers=1 preview_mib=128 preview_max_mib=256 layer_media_mib=64 idle_cache=true");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -248,14 +297,14 @@ index 00000000..edbd32ce
 +            let mut session = effectcraft_host::session();
 +            session.prefs.memory.layer_cache_mb = 64;
 +            session.prefs.memory.media_cache_mb = 64;
-+            session.prefs.memory.preview_cache_mb = 64;
-+            session.prefs.previews.cache_frames_when_idle = false;
++            session.prefs.memory.preview_cache_mb = 128;
++            session.prefs.previews.cache_frames_when_idle = true;
 +            session.prefs.disk.disk_cache_enabled = false;
 +            session.prefs_changed();
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Diagnostic build 2: 1 worker, 64 MiB caches. Open Diagnostics for current/previous log.".to_string(),
++                Ok(_) => "Build 3: 128 MiB preview cache, idle caching on. Diagnostics: cache size, quality and log.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -1920,19 +1969,31 @@ index c1503215..be6f1b4f 100644
      static C: OnceLock<Mutex<HashMap<u64, (u64, Arc<Layout>)>>> = OnceLock::new();
      C.get_or_init(Default::default)
 diff --git a/crates/ui-egui/src/frames.rs b/crates/ui-egui/src/frames.rs
-index 059bc3a0..1cac59a3 100644
+index 059bc3a0..f680e744 100644
 --- a/crates/ui-egui/src/frames.rs
 +++ b/crates/ui-egui/src/frames.rs
-@@ -40,7 +40,7 @@ const MAX_KEEPERS: usize = 64;
+@@ -40,9 +40,19 @@ const MAX_KEEPERS: usize = 64;
  /// GPU frames kept for RAM preview (bytes of video memory) at first. wgpu can't tell how much
  /// video memory there is: each time the device runs out, the budget halves (to
  /// [`MIN_GPU_BUDGET`]) and the frame renders on the CPU (#106).
 -const GPU_BUDGET: usize = 1 << 30;
-+const GPU_BUDGET: usize = if cfg!(target_os = "ios") { 64 << 20 } else { 1 << 30 };
++const IPAD_PREVIEW_MAX: usize = 256 << 20;
++const GPU_BUDGET: usize = if cfg!(target_os = "ios") { IPAD_PREVIEW_MAX } else { 1 << 30 };
  const MIN_GPU_BUDGET: usize = 64 << 20;
  
++/// Total retained viewer pixels (including GPU pixels), not total process memory.
++#[derive(Clone, Copy, Debug)]
++pub struct PreviewCacheUsage {
++    pub bytes: usize,
++    pub gpu_bytes: usize,
++    pub frames: usize,
++    pub budget: usize,
++}
++
  /// A rendered viewer frame: CPU pixels or a GPU texture.
-@@ -460,20 +460,30 @@ pub struct Frames {
+ #[derive(Clone)]
+ pub enum FrameImage {
+@@ -460,20 +470,30 @@ pub struct Frames {
  impl Default for Frames {
      fn default() -> Self {
          #[cfg(not(target_arch = "wasm32"))]
@@ -1940,7 +2001,7 @@ index 059bc3a0..1cac59a3 100644
 +        let threads = if cfg!(target_os = "ios") { 1 } else { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 16) };
          Frames {
 -            cache: Arc::new(Mutex::new(Cache { map: HashMap::new(), order: VecDeque::new(), bytes: 0, gpu_bytes: 0, budget: 3 << 30, gpu_budget: GPU_BUDGET, playhead: None })),
-+            cache: Arc::new(Mutex::new(Cache { map: HashMap::new(), order: VecDeque::new(), bytes: 0, gpu_bytes: 0, budget: if cfg!(target_os = "ios") { 64 << 20 } else { 3 << 30 }, gpu_budget: GPU_BUDGET, playhead: None })),
++            cache: Arc::new(Mutex::new(Cache { map: HashMap::new(), order: VecDeque::new(), bytes: 0, gpu_bytes: 0, budget: if cfg!(target_os = "ios") { 128 << 20 } else { 3 << 30 }, gpu_budget: GPU_BUDGET, playhead: None })),
              inflight: Arc::new(Mutex::new(HashSet::new())),
              queue: Arc::new(Mutex::new(Queue::default())),
              #[cfg(not(target_arch = "wasm32"))]
@@ -1971,7 +2032,25 @@ index 059bc3a0..1cac59a3 100644
              ctx: None,
              last_ms: Arc::new(Mutex::new(0.0)),
              content_keys: Arc::default(),
-@@ -1147,6 +1157,8 @@ impl Worker {
+@@ -830,11 +850,16 @@ impl Frames {
+     /// frames when it shrinks.
+     pub fn set_budget(&self, bytes: usize) {
+         if let Ok(mut c) = self.cache.lock() {
+-            c.budget = bytes;
++            c.budget = if cfg!(target_os = "ios") { bytes.min(IPAD_PREVIEW_MAX) } else { bytes };
+             c.evict_to_budget();
+         }
+     }
+ 
++    pub fn cache_usage(&self) -> Option<PreviewCacheUsage> {
++        let c = self.cache.lock().ok()?;
++        Some(PreviewCacheUsage { bytes: c.bytes, gpu_bytes: c.gpu_bytes, frames: c.map.len(), budget: c.budget })
++    }
++
+     pub fn budget(&self) -> usize {
+         self.cache.lock().map(|c| c.budget).unwrap_or(0)
+     }
+@@ -1147,6 +1172,8 @@ impl Worker {
              job
          };
          let t0 = web_time::Instant::now();
@@ -1980,7 +2059,7 @@ index 059bc3a0..1cac59a3 100644
          let disk = job.src.disk.as_ref().map(|dc| (dc.clone(), frame_disk_key(content_keys, &job.src.project, &job.key, opts_hash(&job.opts))));
          let from_disk = disk.as_ref().and_then(|(dc, k)| dc.get_frame(*k));
          let disk_hit = from_disk.is_some();
-@@ -1157,6 +1169,8 @@ impl Worker {
+@@ -1157,6 +1184,8 @@ impl Worker {
                  // Called off (frames it read may be missing) or failed: not cached, and not
                  // "in progress" forever: the viewer asks for it again.
                  None => {
@@ -1989,14 +2068,14 @@ index 059bc3a0..1cac59a3 100644
                      self.release(job.key, job.urgent);
                      return true;
                  }
-@@ -1165,6 +1179,11 @@ impl Worker {
+@@ -1165,6 +1194,11 @@ impl Worker {
          // Publish the shared frame and wake the viewer before optional RGBA conversion
          // and compression. Persistence still runs on this worker, using the same snapshot.
          self.finish(&job, ci.clone(), t0);
 +        #[cfg(target_os = "ios")]
 +        {
 +            let stats = self.cache.lock().ok().map(|c| (c.bytes, c.gpu_bytes, c.map.len()));
-+            log::info!(target: "effectcraft_diagnostics", "frame_done frame={} ms={:.1} cache_cpu_gpu_count={stats:?}", job.key.frame, t0.elapsed().as_secs_f64() * 1000.0);
++            log::info!(target: "effectcraft_diagnostics", "frame_done frame={} ms={:.1} cache_total_gpu_count={stats:?}", job.key.frame, t0.elapsed().as_secs_f64() * 1000.0);
 +        }
          if !disk_hit && let (Some((dc, k)), FrameImage::Cpu(img)) = (&disk, &ci) {
              let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
