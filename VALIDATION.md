@@ -15,6 +15,9 @@ conformance and document handlers. Three packaging tests pass locally. Rust logi
 is unchanged except matching bridge directory/build labels; full release compilation
 and platform SDK compilation run in Actions. Earlier frontend tests are historical,
 not rerun for this wrapper-only change. Actual opening remains a device test.
+The system Open/Import cancellation path now reveals the existing local browser;
+Save cancellation still aborts without changing the project saved state. This
+small Rust flow change is checked by the complete iOS release compilation.
 
 ## Preview build 7
 

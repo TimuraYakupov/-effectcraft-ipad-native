@@ -261,7 +261,7 @@ new file mode 100644
 index 0000000..33dce29
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/files.rs
-@@ -0,0 +1,663 @@
+@@ -0,0 +1,669 @@
 +//! App-local file dialogs, shared with Files through UIFileSharingEnabled.
 +use std::collections::BTreeSet;
 +use std::path::{Component, Path, PathBuf};
@@ -583,6 +583,12 @@ index 0000000..33dce29
 +                Some(Ok(value)) => {
 +                    self.native_pending = None;
 +                    if value["cancelled"].as_bool() == Some(true) {
++                        if self.active.as_ref().is_some_and(|r| matches!(r.kind, FileDialog::OpenProject | FileDialog::Open { .. })) {
++                            self.system = false;
++                            self.error = "System picker cancelled. Choose a local file below, or tap Browse iPad files to retry.".into();
++                            self.refresh();
++                            return;
++                        }
 +                        self.finish(vec![]);
 +                        return;
 +                    }

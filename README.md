@@ -17,6 +17,10 @@ media still need relinking or a Bridge ZIP. RAM remains 1 GiB.
 
 Output: `EffectCraft-Native-Preview-8.ipa`, build 8, same preview identity.
 This is a compatibility change requiring testing in the user's LiveContainer.
+Cancelling the system Open/Import picker reveals the local Documents browser.
+Copy a project and its Assets folder to Files > On My iPad > LiveContainer >
+EffectCraft, cancel the system picker, then select the local project. The fallback
+Cancel button aborts the command; Browse iPad files retries the system picker.
 
 ## Preview build 7: direct system file dialogs
 
