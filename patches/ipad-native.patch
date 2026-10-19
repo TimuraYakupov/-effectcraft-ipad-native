@@ -61,10 +61,10 @@ index 00000000..b44ad8d1
 +egui_kittest = { workspace = true, features = ["wgpu"] }
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..2c612d76
+index 00000000..e3684ae1
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,204 @@
 +//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
 +use std::path::PathBuf;
 +
@@ -133,14 +133,18 @@ index 00000000..2c612d76
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 9").clicked() {
++                if ui.button("Diagnostics · build 10").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 9").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 10").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
++                ui.label(&self.keyboard.native_status);
++                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
++                ui.separator();
 +                ui.label("One render worker · layer/media caches: 64 MiB each");
 +                ui.horizontal(|ui| {
 +                    ui.label("Preview cache:");
@@ -253,7 +257,9 @@ index 00000000..2c612d76
 +            self.open = open;
 +        }
 +        self.files.show(&mut self.app, ctx);
-+        if let Err(error) = self.keyboard.output(ctx, self.files.is_open() || self.open) {
++        // Diagnostics keeps native capture active for its live key counter; the
++        // input hook suppresses project commands while that window is open.
++        if let Err(error) = self.keyboard.output(ctx, self.files.is_open()) {
 +            self.app.ui.status = error;
 +        }
 +    }
@@ -1066,10 +1072,10 @@ index 00000000..9b1a92dc
 +}
 diff --git a/apps/effectcraft-ios/src/keyboard.rs b/apps/effectcraft-ios/src/keyboard.rs
 new file mode 100644
-index 00000000..86abd165
+index 00000000..67392da6
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/keyboard.rs
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,309 @@
 +//! Bounded hardware-keyboard input, delivered before egui processes RawInput.
 +use eframe::egui::{self, Event, Key, Modifiers};
 +use serde_json::{Value, json};
@@ -1087,6 +1093,9 @@ index 00000000..86abd165
 +    modifiers: Modifiers,
 +    mode: Option<(bool, bool)>,
 +    pub received: u64,
++    pub native_status: String,
++    pub last_key: String,
++    last_status_read: std::time::Instant,
 +}
 +
 +fn read_bounded(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
@@ -1113,12 +1122,15 @@ index 00000000..86abd165
 +        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
 +        let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_nanos()).unwrap_or(0);
 +        Self {
-+            directory: home.join("Library/Caches/EffectCraft/Keyboard9"),
++            directory: home.join("Library/Caches/EffectCraft/Keyboard10"),
 +            session: format!("{}-{time}", std::process::id()),
 +            held: BTreeSet::new(),
 +            modifiers: Modifiers::NONE,
 +            mode: None,
 +            received: 0,
++            native_status: "Waiting for UIKit keyboard status".into(),
++            last_key: "No key received".into(),
++            last_status_read: std::time::Instant::now(),
 +        }
 +    }
 +    fn reset(&mut self, events: &mut Vec<Event>) {
@@ -1133,21 +1145,22 @@ index 00000000..86abd165
 +            self.reset(events);
 +            return Ok(());
 +        }
-+        if blocked {
-+            self.reset(events);
-+            return Ok(());
-+        }
 +        if value["kind"].as_str() == Some("error") {
 +            return Err("Clipboard text exceeds 128 KiB".into());
 +        }
 +        let code = value["code"].as_u64().and_then(|c| u32::try_from(c).ok()).ok_or("Invalid hardware key code")?;
 +        let down = value["down"].as_bool().ok_or("Missing hardware key state")?;
++        self.received = self.received.saturating_add(1);
++        self.last_key = format!("{} (HID {code}) {}", crate::key_codes::name(code).unwrap_or("Modifier/other"), if down { "down" } else { "up" });
++        if blocked {
++            self.reset(events);
++            return Ok(());
++        }
 +        self.modifiers = flags(value["flags"].as_u64().unwrap_or(0));
 +        events.push(Event::ModifiersChanged(self.modifiers));
 +        if code >= 224 {
 +            return Ok(());
 +        }
-+        self.received = self.received.saturating_add(1);
 +        let physical = crate::key_codes::name(code).and_then(Key::from_name);
 +        if down {
 +            match value["kind"].as_str() {
@@ -1196,6 +1209,22 @@ index 00000000..86abd165
 +            return Ok(());
 +        }
 +        let text_focus = ctx.egui_wants_keyboard_input();
++        if self.last_status_read.elapsed() >= std::time::Duration::from_millis(250) {
++            self.last_status_read = std::time::Instant::now();
++            if let Ok(bytes) = read_bounded(&self.directory.join("native.status"), 4096)
++                && let Ok(status) = serde_json::from_slice::<Value>(&bytes)
++                && status["session"].as_str() == Some(self.session.as_str())
++            {
++                self.native_status = format!(
++                    "{} · view={} controller={} · UIKit presses={} · last HID={}",
++                    status["state"].as_str().unwrap_or("Unknown").chars().take(80).collect::<String>(),
++                    status["view_hook"].as_bool().unwrap_or(false),
++                    status["controller_hook"].as_bool().unwrap_or(false),
++                    status["native_presses"].as_u64().unwrap_or(0),
++                    status["last_code"].as_u64().unwrap_or(0)
++                );
++            }
++        }
 +        if blocked && !text_focus {
 +            input.events.retain(|e| !matches!(e, Event::Key { .. } | Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) | Event::ModifiersChanged(_)));
 +        }
@@ -1242,7 +1271,9 @@ index 00000000..86abd165
 +        if !cfg!(target_os = "ios") {
 +            return Ok(());
 +        }
-+        let text = ctx.egui_wants_keyboard_input();
++        // Any focusable widget can want keys. Only IME output means a text editor
++        // needs UIKit's UIKeyInput view instead of the hardware-only controller.
++        let text = ctx.output(|o| o.ime.is_some());
 +        let mode = (text, blocked && !text);
 +        if self.mode != Some(mode) {
 +            std::fs::create_dir_all(&self.directory).map_err(|e| e.to_string())?;
@@ -1303,6 +1334,8 @@ index 00000000..86abd165
 +        bridge.record(&key(76, true, 0), false, true, &mut events).unwrap();
 +        assert!(!events.iter().any(|e| matches!(e, Event::Key { .. })));
 +        assert!(bridge.held.is_empty());
++        assert_eq!(bridge.received, 2);
++        assert!(bridge.last_key.contains("Delete"));
 +    }
 +    #[test]
 +    fn clipboard_and_focus_loss_are_single_events_not_duplicate_key_commands() {
@@ -1354,7 +1387,7 @@ index 00000000..86abd165
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..15fa239a
+index 00000000..425456f4
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
 @@ -0,0 +1,97 @@
@@ -1377,7 +1410,7 @@ index 00000000..15fa239a
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=9 startup workers=1 preview_mib=1024 disk_gib=1 hardware_keyboard=true");
++    log::info!(target: "effectcraft_diagnostics", "build=10 startup workers=1 preview_mib=1024 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1420,7 +1453,7 @@ index 00000000..15fa239a
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 9: hardware keyboard input. Space: preview; Cmd/Ctrl+Z: undo; Cmd/Ctrl+S: save. RAM: 1 GiB.".to_string(),
++                Ok(_) => "Build 10: UIKit keyboard focus and live key diagnostics. Space: preview; Cmd/Ctrl+S: save. RAM: 1 GiB.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);

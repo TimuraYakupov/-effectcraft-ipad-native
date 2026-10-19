@@ -51,6 +51,9 @@ jobs:
         run: |
           xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -fobjc-arc -fmodules -Wall -Wextra -c platform/EffectCraftDocuments.m -o /tmp/effectcraft-documents.o
           xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -fobjc-arc -fmodules -Wall -Wextra -c platform/EffectCraftKeyboard.m -o /tmp/effectcraft-keyboard.o
+      - name: Test keyboard focus and responder delivery in iPad Simulator
+        timeout-minutes: 8
+        run: python3 scripts/test_uikit_keyboard.py
       - name: Compile native ARM64 app
         working-directory: effectcraft
         run: cargo +1.95.0 rustc --locked --release --target aarch64-apple-ios -p effectcraft-ios -- -C link-arg=/tmp/effectcraft-documents.o -C link-arg=/tmp/effectcraft-keyboard.o -C link-arg=-framework -C link-arg=UIKit -C link-arg=-framework -C link-arg=Foundation -C link-arg=-framework -C link-arg=UniformTypeIdentifiers

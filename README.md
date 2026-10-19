@@ -1,5 +1,24 @@
 # EffectCraft native iPad preview
 
+## Preview build 10: UIKit keyboard focus
+
+The user reported no hardware input in build 9. Its window sendEvent override
+never assigned a first responder outside IME editing. Build 10 extends the Winit
+UIView/UIViewController pressesBegan/Changed/Ended/Cancelled methods instead.
+The controller becomes first responder for hardware input without UIKeyInput,
+so it does not request the software keyboard. Actual IME output yields to the
+text view; focus is restored after text editing and file dialogs. The legacy
+UIApplication.windows fallback matches winit's lifecycle without scene manifests.
+
+Diagnostics shows UIKit hook/focus state, native press count, editor received
+count and last HID code. Pressing keys there updates counters without running
+project commands. An iPad Simulator smoke app tests the actual production UIKit
+module, responder focus, Space down/repeat/up, Cmd+S and IME/dialog recovery.
+It uses test doubles for key payloads; it does not prove real hardware/LiveContainer
+delivery. That still needs the user's physical iPad check.
+
+Output: `EffectCraft-Native-Preview-10.ipa`, build 10. RAM remains 1 GiB.
+
 ## Preview build 9: hardware keyboard
 
 The user confirmed project opening, saving and import in build 8. Build 9 adds
@@ -188,7 +207,7 @@ portable Bridge ZIP export and audio output are not yet connected in this fronte
 Push this build repository to GitHub. The first push starts the build automatically;
 later builds can also be started with **Actions → Native iPad preview → Run workflow**.
 The standard `macos-15` runner builds an unsigned ARM64 iOS executable and packages
-`EffectCraft-Native-Preview-9.ipa` as an Actions artifact. No Apple signing key is needed
+`EffectCraft-Native-Preview-10.ipa` as an Actions artifact. No Apple signing key is needed
 for this unsigned output. Previous builds launched in LiveContainer on the test iPad.
 The preview uses `com.effectcraft.ipad.nativepreview`, separate from the stable app.
 

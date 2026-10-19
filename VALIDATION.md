@@ -1,5 +1,27 @@
 # Validation — 2026-10-18
 
+## Preview build 10 — 2026-10-19 UTC
+
+Device feedback: keyboard still does not work in build 9. Its Rust event-translation
+tests did not cover UIKit focus/routing. The pinned winit view resigns first responder
+when IME is disabled; the window interceptor did not establish a replacement.
+Build 10 replaces it with view/controller UIResponder press methods, a non-UIKeyInput
+hardware first responder, IME-based handoff and legacy-window discovery.
+
+Live diagnostics exposes native hook/focus and both native/editor event counts;
+diagnostic-window input is observable while project commands remain suppressed.
+All 8 translation/text/clipboard tests and 3 packaging tests pass locally, along
+with locked ARM64 iOS cargo check. The existing blocked-input test now verifies
+that diagnostic counters advance without producing editor keys.
+
+Actions additionally runs an actual UIKit iPad Simulator app with the production
+Objective-C bridge. It verifies missing pre-install controller focus, successful
+hook installation and focus, no UIKeyInput on the hardware responder, exact Space
+down/repeat/up records, Cmd+S modifiers, text-focus handoff, file-dialog exclusion,
+focus recovery and native status. Key payloads are synthetic test doubles sent
+through the installed UIKit responder methods; real iPad/LiveContainer keyboard
+delivery is explicitly not claimed by this smoke test.
+
 ## Preview build 9 — 2026-10-19
 
 The user confirmed build 8 opening, saving and importing. The pinned winit iOS
