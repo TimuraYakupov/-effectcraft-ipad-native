@@ -20,19 +20,33 @@ def package(root: Path) -> Path:
     if platforms != [["IOS"]]:
         raise ValueError("Binary is not built for an iOS device")
     plist = {
-        "CFBundleDisplayName": "EC Native Preview 7",
+        "CFBundleDisplayName": "EC Native Preview 8",
         "CFBundleName": "EffectCraft Native Preview",
         "CFBundleIdentifier": "com.effectcraft.ipad.nativepreview",
         "CFBundleExecutable": "EffectCraftNative",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "0.10.0",
-        "CFBundleVersion": "7",
+        "CFBundleVersion": "8",
         "MinimumOSVersion": "16.0",
         "UIDeviceFamily": [2],
         "CFBundleSupportedPlatforms": ["iPhoneOS"],
         "LSRequiresIPhoneOS": True,
         "UIFileSharingEnabled": True,
         "LSSupportsOpeningDocumentsInPlace": True,
+        "CFBundleDocumentTypes": [{
+            "CFBundleTypeName": "EffectCraft project",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["com.effectcraft.project", "com.effectcraft.project.xml"],
+        }],
+        "UTExportedTypeDeclarations": [
+            {"UTTypeIdentifier": "com.effectcraft.project", "UTTypeDescription": "EffectCraft project",
+             "UTTypeConformsTo": ["public.json", "public.data", "public.content"],
+             "UTTypeTagSpecification": {"public.filename-extension": ["ecproj"]}},
+            {"UTTypeIdentifier": "com.effectcraft.project.xml", "UTTypeDescription": "EffectCraft XML project",
+             "UTTypeConformsTo": ["public.xml", "public.data", "public.content"],
+             "UTTypeTagSpecification": {"public.filename-extension": ["ecprojx"]}},
+        ],
         "UIStatusBarHidden": True,
         "UIViewControllerBasedStatusBarAppearance": True,
         "UIRequiresFullScreen": True,
@@ -44,7 +58,7 @@ def package(root: Path) -> Path:
     }
     out = root / "output"
     out.mkdir(exist_ok=True)
-    ipa = out / "EffectCraft-Native-Preview-7.ipa"
+    ipa = out / "EffectCraft-Native-Preview-8.ipa"
     prefix = "Payload/EffectCraftNative.app/"
     with zipfile.ZipFile(ipa, "w", zipfile.ZIP_DEFLATED) as archive:
         executable = zipfile.ZipInfo(prefix + "EffectCraftNative")

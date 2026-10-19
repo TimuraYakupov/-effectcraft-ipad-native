@@ -1,5 +1,23 @@
 # EffectCraft native iPad preview
 
+## Preview build 8: copy-based project opening
+
+The supplied device recording shows file selection but the Files window does not
+close after Open. The failing open-in-place handoff has not been diagnosed on the
+physical device. Build 8 uses copy/import mode for project and media selection,
+constrains the picker to data/content, and declares ecproj/ecprojx document UTIs
+in the packaged Info.plist. Both document-picker delegate selectors are handled,
+with duplicate completion suppressed and explicit dismissal on selection/cancel.
+
+Project copies are retained in unique Opened Projects folders inside EffectCraft
+Documents (shared LiveContainer/EffectCraft on LiveContainer). The editor never
+uses the picker's temporary URL as its project. Save updates the working copy;
+Save As chooses another location. Originals remain unchanged. Loose project
+media still need relinking or a Bridge ZIP. RAM remains 1 GiB.
+
+Output: `EffectCraft-Native-Preview-8.ipa`, build 8, same preview identity.
+This is a compatibility change requiring testing in the user's LiveContainer.
+
 ## Preview build 7: direct system file dialogs
 
 File > Open presents the system picker immediately: select a project or Bridge

@@ -129,14 +129,14 @@ index 0000000..e41d50d
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 7").clicked() {
++                if ui.button("Diagnostics · build 8").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 7").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 8").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.label("One render worker · layer/media caches: 64 MiB each");
 +                ui.horizontal(|ui| {
 +                    ui.label("Preview cache:");
@@ -995,7 +995,7 @@ index 0000000..ae781db
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=7 startup workers=1 preview_mib=1024 disk_gib=1 direct_files=true");
++    log::info!(target: "effectcraft_diagnostics", "build=8 startup workers=1 preview_mib=1024 disk_gib=1 direct_files=true");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1038,7 +1038,7 @@ index 0000000..ae781db
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 7: File > Open, Save As and Import use the iPad Files window directly. RAM cache: 1 GiB.".to_string(),
++                Ok(_) => "Build 8: Open creates a local project copy. Use Save As for another location. RAM cache: 1 GiB.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -1108,7 +1108,7 @@ index 0000000..b52639d
 +impl NativeDocuments {
 +    pub fn new() -> Self {
 +        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-+        Self { directory: home.join("Library/Caches/EffectCraft/DocumentBridge7"), grants: Arc::default() }
++        Self { directory: home.join("Library/Caches/EffectCraft/DocumentBridge8"), grants: Arc::default() }
 +    }
 +    pub fn available(&self) -> bool {
 +        if !cfg!(target_os = "ios") {

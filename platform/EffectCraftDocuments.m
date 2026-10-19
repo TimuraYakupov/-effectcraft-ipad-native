@@ -17,18 +17,29 @@
 @property(nonatomic,copy) NSString *pending;
 @property(nonatomic,strong) NSURL *pendingRoot;
 @property(nonatomic,strong) NSDictionary *request;
+@property(nonatomic) BOOL handlingSelection;
 @end
 
 static ECDocuments *ECBridge;
 static dispatch_source_t ECTimer;
 static dispatch_queue_t ECQueue;
 
+static NSURL *ECProjectCopies(void) {
+    const char *home = getenv("HOME");
+    NSString *path = home ? [NSString stringWithUTF8String:home] : nil;
+    if (!path) return nil;
+    NSRange guest = [path rangeOfString:@"/Documents/Data/Application/"];
+    if (guest.location != NSNotFound) path = [[path substringToIndex:guest.location] stringByAppendingPathComponent:@"Documents/EffectCraft"];
+    else path = [path stringByAppendingPathComponent:@"Documents"];
+    return [NSURL fileURLWithPath:[path stringByAppendingPathComponent:@"Opened Projects"] isDirectory:YES];
+}
+
 static NSURL *ECRoot(void) {
     const char *home = getenv("HOME");
     if (!home) return nil;
     NSString *value = [NSString stringWithUTF8String:home];
     if (!value) return nil;
-    return [NSURL fileURLWithPath:[value stringByAppendingPathComponent:@"Library/Caches/EffectCraft/DocumentBridge7"] isDirectory:YES];
+    return [NSURL fileURLWithPath:[value stringByAppendingPathComponent:@"Library/Caches/EffectCraft/DocumentBridge8"] isDirectory:YES];
 }
 static NSURL *ECFile(NSURL *root, NSString *name) { return [root URLByAppendingPathComponent:name]; }
 static void ECReply(NSURL *root, NSString *name, NSDictionary *value) {
@@ -62,10 +73,21 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
         self.pendingRoot = nil;
         self.picker = nil;
         self.request = nil;
+        self.handlingSelection = NO;
     }
 }
-- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller { [self complete:@{@"cancelled":@YES}]; }
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    if (self.handlingSelection) return;
+    [controller dismissViewControllerAnimated:YES completion:nil];
+    [self complete:@{@"cancelled":@YES}];
+}
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentAtURL:(NSURL *)url {
+    [self documentPicker:controller didPickDocumentsAtURLs:url ? @[url] : @[]];
+}
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    if (!self.pending || self.handlingSelection) return;
+    self.handlingSelection = YES;
+    [controller dismissViewControllerAnimated:YES completion:nil];
     NSLog(@"EffectCraft Files: picker returned %lu URLs", (unsigned long)urls.count);
     if (!urls.count || urls.count > 64) { [self complete:@{@"error":@"Select between 1 and 64 files"}]; return; }
     NSDictionary *request = self.request;
@@ -73,10 +95,30 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
     dispatch_async(ECQueue, ^{
         NSMutableArray *paths = [NSMutableArray new];
         NSString *importTo = [request[@"import_to"] isKindOfClass:NSString.class] ? request[@"import_to"] : nil;
+        if (!importTo && [request[@"action"] isEqual:@"open"]) importTo = ECProjectCopies().path;
+        if ([request[@"action"] isEqual:@"open"] && !importTo) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self complete:@{@"error":@"The app's project folder is unavailable"}]; }); return;
+        }
         NSURL *importFolder = importTo ? [[NSURL fileURLWithPath:importTo isDirectory:YES] URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES] : nil;
         NSError *error = nil;
         if (importFolder && ![NSFileManager.defaultManager createDirectoryAtURL:importFolder withIntermediateDirectories:YES attributes:nil error:&error]) {
             dispatch_async(dispatch_get_main_queue(), ^{ [self complete:@{@"error":error.localizedDescription ?: @"Cannot create import folder"}]; }); return;
+        }
+        // Rust retains individual project paths. Register their persistent local parent,
+        // rather than handing the editor the document picker's temporary import URL.
+        if (importFolder && ![request[@"import_to"] isKindOfClass:NSString.class]) {
+            @synchronized(self) {
+                if (self.grants.count >= 256) {
+                    [NSFileManager.defaultManager removeItemAtURL:importFolder error:nil];
+                    dispatch_async(dispatch_get_main_queue(), ^{ [self complete:@{@"error":@"Save your work and relaunch before opening more projects"}]; }); return;
+                }
+                ECFolderPresenter *presenter = [ECFolderPresenter new];
+                presenter.presentedItemURL = importFolder;
+                presenter.presentedItemOperationQueue = [NSOperationQueue new];
+                presenter.presentedItemOperationQueue.maxConcurrentOperationCount = 1;
+                [NSFileCoordinator addFilePresenter:presenter];
+                [self.grants addObject:@{@"url":importFolder,@"scoped":@NO,@"presenter":presenter}];
+            }
         }
         for (NSURL *url in urls) {
             if (!url.isFileURL) { error = [NSError errorWithDomain:@"EffectCraft" code:1 userInfo:@{NSLocalizedDescriptionKey:@"The provider returned an invalid file"}]; break; }
@@ -139,14 +181,25 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
     }
     while (view.presentedViewController && !view.presentedViewController.isBeingDismissed) view = view.presentedViewController;
     if (!view || !view.view.window) { ECReply(root,name,@{@"error":@"No active iPad window. Close the menu and try again."}); return; }
-    @synchronized(self) { self.pending = name; self.pendingRoot = root; self.request = request; }
+    @synchronized(self) { self.pending = name; self.pendingRoot = root; self.request = request; self.handlingSelection = NO; }
     NSString *action = request[@"action"];
     if ([action isEqual:@"export"]) {
         NSString *path = request[@"path"];
         if (![path isKindOfClass:NSString.class] || ![NSFileManager.defaultManager fileExistsAtPath:path]) { [self complete:@{@"error":@"The file is not ready to save"}]; return; }
         self.picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[[NSURL fileURLWithPath:path]] asCopy:NO];
     } else {
-        self.picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:[action isEqual:@"folder"] ? @[UTTypeFolder] : @[UTTypeItem] asCopy:NO];
+        if ([action isEqual:@"folder"]) {
+            self.picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
+        } else {
+            NSMutableArray<UTType *> *types = [NSMutableArray arrayWithArray:@[UTTypeData, UTTypeContent]];
+            for (NSString *extension in @[@"ecproj", @"ecprojx"]) {
+                UTType *type = [UTType typeWithFilenameExtension:extension conformingToType:UTTypeData];
+                if (type) [types addObject:type];
+            }
+            // Import mode asks Files for a local copy, avoiding open-in-place handoff
+            // of an unregistered document through LiveContainer's host identity.
+            self.picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
+        }
     }
     self.picker.delegate = self;
     self.picker.allowsMultipleSelection = [action isEqual:@"open"] && [request[@"many"] boolValue];

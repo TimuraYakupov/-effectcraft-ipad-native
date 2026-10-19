@@ -1,5 +1,21 @@
 # Validation — 2026-10-18
 
+## Preview build 8 — 2026-10-19
+
+Inspected all seconds of the 9.53-second user recording: the file highlights,
+but the system picker remains open after Open. It does not establish whether
+the OS/provider is rejecting the open-in-place operation or a callback is missing.
+The project parser is not reached in the shown sequence.
+
+Changes: copy/import mode instead of in-place for files, data/content filtering,
+ecproj/ecprojx UTI declarations, both delegate completion selectors, explicit
+picker dismissal on selection/cancel, persistent
+working copies. The packaged-plist regression checks both extensions, data
+conformance and document handlers. Three packaging tests pass locally. Rust logic
+is unchanged except matching bridge directory/build labels; full release compilation
+and platform SDK compilation run in Actions. Earlier frontend tests are historical,
+not rerun for this wrapper-only change. Actual opening remains a device test.
+
 ## Preview build 7
 
 The user reported that build 6's folder picker did not complete after Open. The

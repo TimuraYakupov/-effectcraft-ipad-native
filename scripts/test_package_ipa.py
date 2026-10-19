@@ -39,8 +39,14 @@ class PackagingTests(unittest.TestCase):
             prefix = "Payload/EffectCraftNative.app/"
             info = plistlib.loads(archive.read(prefix + "Info.plist"))
             self.assertEqual(info["CFBundleIdentifier"], "com.effectcraft.ipad.nativepreview")
+            self.assertEqual(info["CFBundleVersion"], "8")
             self.assertEqual(info["UIDeviceFamily"], [2])
             self.assertTrue(info["UIStatusBarHidden"])
+            declarations = {entry["UTTypeIdentifier"]: entry for entry in info["UTExportedTypeDeclarations"]}
+            for name, extension in [("com.effectcraft.project", "ecproj"), ("com.effectcraft.project.xml", "ecprojx")]:
+                self.assertIn("public.data", declarations[name]["UTTypeConformsTo"])
+                self.assertIn(extension, declarations[name]["UTTypeTagSpecification"]["public.filename-extension"])
+                self.assertIn(name, info["CFBundleDocumentTypes"][0]["LSItemContentTypes"])
             self.assertEqual(archive.read(prefix + "EffectCraftNative"), self.binary.read_bytes())
             self.assertEqual(archive.getinfo(prefix + "EffectCraftNative").external_attr >> 16, 0o100755)
         self.assertTrue((self.root / "output/SHA256.json").is_file())
