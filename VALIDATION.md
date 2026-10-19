@@ -1,5 +1,26 @@
 # Validation — 2026-10-18
 
+## Preview build 9 — 2026-10-19
+
+The user confirmed build 8 opening, saving and importing. The pinned winit iOS
+backend handles UIKeyInput but does not deliver physical presses as editor key
+transitions. The wrapper adds bounded key/modifier/clipboard input before egui's
+RawInput processing, retaining existing editor shortcut and text-focus guards.
+Space release is preserved; repeats do not become extra taps. Focus loss resets
+held state without generating a Space release. Stray releases are ignored.
+
+The small hardware-keys Cargo harness tests the actual production modules against
+egui 0.36.2: HID mappings, Space down/repeat/up, Cmd/Ctrl with a Russian layout,
+focused text recovery, modal blocking, single clipboard events, focus loss,
+malformed/oversized input, and text entry/paste through a real TextEdit. It avoids
+pulling the renderer into the test binary. Actions runs this plus journal, ZIP and
+packaging checks, compiles both UIKit modules with the iPhoneOS SDK, and builds
+the full native ARM64 release. Device key routing and LiveContainer clipboard
+permissions require a physical iPad check; no device result is claimed here.
+
+Passed locally: all 8 keyboard tests, all 3 packaging tests, and locked
+`cargo check --target aarch64-apple-ios -p effectcraft-ios` with Rust 1.95.0.
+
 ## Preview build 8 — 2026-10-19
 
 Inspected all seconds of the 9.53-second user recording: the file highlights,

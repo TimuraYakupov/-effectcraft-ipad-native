@@ -1,0 +1,6 @@
+effectcraft/
+output/
+scripts/__pycache__/
+tests/hardware-keys/target/
+tests/hardware-keys/src/keyboard.rs
+tests/hardware-keys/src/key_codes.rs

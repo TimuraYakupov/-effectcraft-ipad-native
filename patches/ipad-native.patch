@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index ce8fe12..a889d7c 100644
+index ce8fe123..a889d7cb 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -1387,6 +1387,20 @@ dependencies = [
@@ -33,7 +33,7 @@ index ce8fe12..a889d7c 100644
   "egui",
 diff --git a/apps/effectcraft-ios/Cargo.toml b/apps/effectcraft-ios/Cargo.toml
 new file mode 100644
-index 0000000..b44ad8d
+index 00000000..b44ad8d1
 --- /dev/null
 +++ b/apps/effectcraft-ios/Cargo.toml
 @@ -0,0 +1,22 @@
@@ -61,10 +61,10 @@ index 0000000..b44ad8d
 +egui_kittest = { workspace = true, features = ["wgpu"] }
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 0000000..e41d50d
+index 00000000..2c612d76
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,198 @@
 +//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
 +use std::path::PathBuf;
 +
@@ -74,6 +74,7 @@ index 0000000..e41d50d
 +pub struct DiagnosticApp {
 +    pub app: EffectcraftApp,
 +    pub files: crate::files::Files,
++    pub keyboard: crate::keyboard::Keyboard,
 +    pub directory: PathBuf,
 +    pub startup_error: Option<String>,
 +    pub open: bool,
@@ -119,6 +120,9 @@ index 0000000..e41d50d
 +    }
 +
 +    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
++        if let Err(error) = self.keyboard.input(ctx, input, self.files.is_open() || self.open) {
++            self.app.ui.status = error;
++        }
 +        self.app.raw_input_hook(ctx, input);
 +    }
 +
@@ -129,14 +133,14 @@ index 0000000..e41d50d
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 8").clicked() {
++                if ui.button("Diagnostics · build 9").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 8").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 9").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.label("One render worker · layer/media caches: 64 MiB each");
 +                ui.horizontal(|ui| {
 +                    ui.label("Preview cache:");
@@ -249,6 +253,9 @@ index 0000000..e41d50d
 +            self.open = open;
 +        }
 +        self.files.show(&mut self.app, ctx);
++        if let Err(error) = self.keyboard.output(ctx, self.files.is_open() || self.open) {
++            self.app.ui.status = error;
++        }
 +    }
 +
 +    fn on_exit(&mut self) {
@@ -258,10 +265,10 @@ index 0000000..e41d50d
 +}
 diff --git a/apps/effectcraft-ios/src/files.rs b/apps/effectcraft-ios/src/files.rs
 new file mode 100644
-index 0000000..33dce29
+index 00000000..c9fc97b2
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/files.rs
-@@ -0,0 +1,670 @@
+@@ -0,0 +1,674 @@
 +//! App-local file dialogs, shared with Files through UIFileSharingEnabled.
 +use std::collections::BTreeSet;
 +use std::path::{Component, Path, PathBuf};
@@ -342,6 +349,10 @@ index 0000000..33dce29
 +}
 +
 +impl Files {
++    pub fn is_open(&self) -> bool {
++        self.active.is_some() || self.export_only || self.native_pending.is_some() || self.unpacking.is_some()
++    }
++
 +    pub fn install(app: &mut EffectcraftApp, ctx: &egui::Context) -> Self {
 +        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
 +        let (root, location) = documents_folder(&home);
@@ -934,7 +945,7 @@ index 0000000..33dce29
 +}
 diff --git a/apps/effectcraft-ios/src/journal.rs b/apps/effectcraft-ios/src/journal.rs
 new file mode 100644
-index 0000000..536a1b2
+index 00000000..536a1b26
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/journal.rs
 @@ -0,0 +1,41 @@
@@ -979,12 +990,374 @@ index 0000000..536a1b2
 +        assert!(read_tail(&path).is_err());
 +    }
 +}
+diff --git a/apps/effectcraft-ios/src/key_codes.rs b/apps/effectcraft-ios/src/key_codes.rs
+new file mode 100644
+index 00000000..9b1a92dc
+--- /dev/null
++++ b/apps/effectcraft-ios/src/key_codes.rs
+@@ -0,0 +1,68 @@
++//! USB HID keyboard-page (0x07) usages reported by UIKit's UIKey.keyCode.
++pub fn name(code: u32) -> Option<&'static str> {
++    const LETTERS: [&str; 26] =
++        ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
++    const DIGITS: [&str; 10] = ["Num1", "Num2", "Num3", "Num4", "Num5", "Num6", "Num7", "Num8", "Num9", "Num0"];
++    const FUNCTIONS: [&str; 12] = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"];
++    match code {
++        4..=29 => LETTERS.get((code - 4) as usize).copied(),
++        30..=39 => DIGITS.get((code - 30) as usize).copied(),
++        58..=69 => FUNCTIONS.get((code - 58) as usize).copied(),
++        89..=97 => DIGITS.get((code - 89) as usize).copied(),
++        40 | 88 => Some("Enter"),
++        41 => Some("Escape"),
++        42 => Some("Backspace"),
++        43 => Some("Tab"),
++        44 => Some("Space"),
++        45 | 86 => Some("Minus"),
++        46 => Some("Equals"),
++        47 => Some("OpenBracket"),
++        48 => Some("CloseBracket"),
++        49 | 50 => Some("Backslash"),
++        51 => Some("Semicolon"),
++        52 => Some("Quote"),
++        53 => Some("Backtick"),
++        54 => Some("Comma"),
++        55 | 99 => Some("Period"),
++        56 | 84 => Some("Slash"),
++        73 => Some("Insert"),
++        74 => Some("Home"),
++        75 => Some("PageUp"),
++        76 => Some("Delete"),
++        77 => Some("End"),
++        78 => Some("PageDown"),
++        79 => Some("ArrowRight"),
++        80 => Some("ArrowLeft"),
++        81 => Some("ArrowDown"),
++        82 => Some("ArrowUp"),
++        87 => Some("Plus"),
++        98 => Some("Num0"),
++        _ => None,
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn hid_shortcuts_are_not_unicode_or_platform_key_codes() {
++        assert_eq!(name(44), Some("Space"));
++        assert_eq!(name(29), Some("Z"));
++        assert_eq!(name(22), Some("S"));
++        assert_eq!(name(42), Some("Backspace"));
++        assert_eq!(name(76), Some("Delete"));
++        assert_eq!(name(79), Some("ArrowRight"));
++        assert_eq!(name(80), Some("ArrowLeft"));
++    }
++    #[test]
++    fn keypad_and_top_row_agree_without_out_of_bounds_aliases() {
++        for (row, pad) in (30..=38).zip(89..=97) {
++            assert_eq!(name(row), name(pad));
++        }
++        assert_eq!(name(39), name(98));
++        assert_eq!(name(40), name(88));
++        for unknown in [0, 3, 57, 83, 224, 231, u32::MAX] {
++            assert_eq!(name(unknown), None);
++        }
++    }
++}
+diff --git a/apps/effectcraft-ios/src/keyboard.rs b/apps/effectcraft-ios/src/keyboard.rs
+new file mode 100644
+index 00000000..86abd165
+--- /dev/null
++++ b/apps/effectcraft-ios/src/keyboard.rs
+@@ -0,0 +1,282 @@
++//! Bounded hardware-keyboard input, delivered before egui processes RawInput.
++use eframe::egui::{self, Event, Key, Modifiers};
++use serde_json::{Value, json};
++use std::collections::BTreeSet;
++use std::io::Read;
++use std::path::{Path, PathBuf};
++
++const MAX_RECORD: u64 = 1 << 20;
++const MAX_CLIPBOARD: usize = 128 << 10;
++
++pub struct Keyboard {
++    directory: PathBuf,
++    session: String,
++    held: BTreeSet<Key>,
++    modifiers: Modifiers,
++    mode: Option<(bool, bool)>,
++    pub received: u64,
++}
++
++fn read_bounded(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
++    let mut bytes = Vec::new();
++    std::fs::File::open(path)?.take(max + 1).read_to_end(&mut bytes)?;
++    if bytes.len() as u64 > max {
++        return Err(std::io::Error::other("Keyboard record is too large"));
++    }
++    Ok(bytes)
++}
++fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
++    let temporary = path.with_extension("tmp");
++    std::fs::write(&temporary, bytes)?;
++    std::fs::rename(&temporary, path)
++}
++fn flags(value: u64) -> Modifiers {
++    let ctrl = value & (1 << 18) != 0;
++    let mac_cmd = value & (1 << 20) != 0;
++    Modifiers { alt: value & (1 << 19) != 0, shift: value & (1 << 17) != 0, ctrl, mac_cmd, command: mac_cmd || ctrl }
++}
++
++impl Keyboard {
++    pub fn new() -> Self {
++        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
++        let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_nanos()).unwrap_or(0);
++        Self {
++            directory: home.join("Library/Caches/EffectCraft/Keyboard9"),
++            session: format!("{}-{time}", std::process::id()),
++            held: BTreeSet::new(),
++            modifiers: Modifiers::NONE,
++            mode: None,
++            received: 0,
++        }
++    }
++    fn reset(&mut self, events: &mut Vec<Event>) {
++        // A lost-focus release must not become a Space tap and start a preview.
++        events.push(Event::WindowFocused(false));
++        self.held.clear();
++        self.modifiers = Modifiers::NONE;
++        events.push(Event::ModifiersChanged(self.modifiers));
++    }
++    fn record(&mut self, value: &Value, text_focus: bool, blocked: bool, events: &mut Vec<Event>) -> Result<(), String> {
++        if value["kind"].as_str() == Some("reset") {
++            self.reset(events);
++            return Ok(());
++        }
++        if blocked {
++            self.reset(events);
++            return Ok(());
++        }
++        if value["kind"].as_str() == Some("error") {
++            return Err("Clipboard text exceeds 128 KiB".into());
++        }
++        let code = value["code"].as_u64().and_then(|c| u32::try_from(c).ok()).ok_or("Invalid hardware key code")?;
++        let down = value["down"].as_bool().ok_or("Missing hardware key state")?;
++        self.modifiers = flags(value["flags"].as_u64().unwrap_or(0));
++        events.push(Event::ModifiersChanged(self.modifiers));
++        if code >= 224 {
++            return Ok(());
++        }
++        self.received = self.received.saturating_add(1);
++        let physical = crate::key_codes::name(code).and_then(Key::from_name);
++        if down {
++            match value["kind"].as_str() {
++                Some("copy") => {
++                    events.push(Event::Copy);
++                    return Ok(());
++                }
++                Some("cut") => {
++                    events.push(Event::Cut);
++                    return Ok(());
++                }
++                Some("paste") => {
++                    let text = value["text"].as_str().unwrap_or("");
++                    if text.len() > MAX_CLIPBOARD {
++                        return Err("Clipboard text exceeds 128 KiB".into());
++                    }
++                    events.push(Event::Paste(text.to_string()));
++                    return Ok(());
++                }
++                _ => {}
++            }
++        }
++        let Some(physical) = physical else {
++            if code == 85 && down && !self.modifiers.command {
++                events.push(Event::Text("*".into()));
++            }
++            return Ok(());
++        };
++        let logical = value["logical"].as_str().filter(|s| s.len() <= 64).and_then(|s| Key::from_name(&s.to_ascii_uppercase())).unwrap_or(physical);
++        let repeat = down && (!self.held.insert(physical) || value["repeat"].as_bool() == Some(true));
++        if !down && !self.held.remove(&physical) {
++            return Ok(());
++        }
++        events.push(Event::Key { key: logical, physical_key: Some(physical), pressed: down, repeat, modifiers: self.modifiers });
++        // Usually UIKit/winit owns text input. If focus changed between capture and
++        // delivery, recover the captured printable character exactly once here.
++        if down && text_focus && !self.modifiers.command && !matches!(physical, Key::Enter | Key::Tab | Key::Escape) {
++            if let Some(text) = value["text"].as_str().filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control)) {
++                events.push(Event::Text(text.to_string()));
++            }
++        }
++        Ok(())
++    }
++    pub fn input(&mut self, ctx: &egui::Context, input: &mut egui::RawInput, blocked: bool) -> Result<(), String> {
++        if !cfg!(target_os = "ios") {
++            return Ok(());
++        }
++        let text_focus = ctx.egui_wants_keyboard_input();
++        if blocked && !text_focus {
++            input.events.retain(|e| !matches!(e, Event::Key { .. } | Event::Text(_) | Event::Copy | Event::Cut | Event::Paste(_) | Event::ModifiersChanged(_)));
++        }
++        let prefix = format!("{}-", self.session);
++        let mut files = Vec::new();
++        if let Ok(entries) = std::fs::read_dir(&self.directory) {
++            for entry in entries.take(2048).filter_map(Result::ok) {
++                let name = entry.file_name().to_string_lossy().into_owned();
++                if !name.ends_with(".key") {
++                    continue;
++                }
++                if !name.starts_with(&prefix) {
++                    let _ = std::fs::remove_file(entry.path());
++                    continue;
++                }
++                files.push(entry.path());
++            }
++        }
++        files.sort();
++        let had_records = !files.is_empty();
++        let mut error = None;
++        for file in files.into_iter().take(128) {
++            let result = read_bounded(&file, MAX_RECORD)
++                .map_err(|e| e.to_string())
++                .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|e| e.to_string()))
++                .and_then(|value| self.record(&value, text_focus, blocked && !text_focus, &mut input.events));
++            let _ = std::fs::remove_file(file);
++            if let Err(e) = result {
++                self.reset(&mut input.events);
++                error = Some(e);
++            }
++        }
++        if had_records && input.focused && input.events.iter().any(|e| matches!(e, Event::WindowFocused(false))) {
++            input.events.push(Event::WindowFocused(true));
++        }
++        if !self.held.is_empty() {
++            ctx.request_repaint();
++        }
++        // File-backed IPC has no winit wake event; poll cheaply while the app is idle.
++        ctx.request_repaint_after(std::time::Duration::from_millis(33));
++        if let Some(error) = error { Err(error) } else { Ok(()) }
++    }
++    pub fn output(&mut self, ctx: &egui::Context, blocked: bool) -> Result<(), String> {
++        if !cfg!(target_os = "ios") {
++            return Ok(());
++        }
++        let text = ctx.egui_wants_keyboard_input();
++        let mode = (text, blocked && !text);
++        if self.mode != Some(mode) {
++            std::fs::create_dir_all(&self.directory).map_err(|e| e.to_string())?;
++            let bytes =
++                serde_json::to_vec(&json!({"pid":std::process::id(),"session":self.session,"text":mode.0,"blocked":mode.1})).map_err(|e| e.to_string())?;
++            write_atomic(&self.directory.join("state.json"), &bytes).map_err(|e| e.to_string())?;
++            self.mode = Some(mode);
++        }
++        let copied = ctx.output(|o| o.commands.iter().rev().find_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t.clone()) } else { None }));
++        if let Some(text) = copied {
++            if text.len() > MAX_CLIPBOARD {
++                return Err("Clipboard text exceeds 128 KiB".into());
++            }
++            let bytes = serde_json::to_vec(&json!({"session":self.session,"text":text})).map_err(|e| e.to_string())?;
++            write_atomic(&self.directory.join("clipboard.request"), &bytes).map_err(|e| e.to_string())?;
++        }
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn key(code: u32, down: bool, modifiers: u64) -> Value {
++        json!({"kind":"key","code":code,"down":down,"flags":modifiers})
++    }
++    #[test]
++    fn space_has_a_real_release_and_repeats_do_not_become_extra_taps() {
++        let mut bridge = Keyboard::new();
++        let mut events = vec![];
++        bridge.record(&key(44, true, 0), false, false, &mut events).unwrap();
++        bridge.record(&key(44, true, 0), false, false, &mut events).unwrap();
++        bridge.record(&key(44, false, 0), false, false, &mut events).unwrap();
++        let taps: Vec<_> = events.iter().filter_map(|e| if let Event::Key { pressed, repeat, .. } = e { Some((*pressed, *repeat)) } else { None }).collect();
++        assert_eq!(taps, vec![(true, false), (true, true), (false, false)]);
++        assert!(bridge.held.is_empty());
++    }
++    #[test]
++    fn command_and_control_chords_reach_shortcuts_with_russian_layout() {
++        for mask in [1 << 18, 1 << 20] {
++            let mut bridge = Keyboard::new();
++            let mut events = vec![];
++            let mut record = key(29, true, mask);
++            record["logical"] = json!("я");
++            bridge.record(&record, false, false, &mut events).unwrap();
++            assert!(events.iter().any(|e| matches!(e,Event::Key {key:Key::Z,modifiers,..} if modifiers.command)));
++        }
++    }
++    #[test]
++    fn text_focus_does_not_lose_captured_characters_or_turn_space_into_commands() {
++        let mut bridge = Keyboard::new();
++        let mut events = vec![];
++        let mut record = key(44, true, 0);
++        record["text"] = json!(" ");
++        bridge.record(&record, true, false, &mut events).unwrap();
++        assert!(events.contains(&Event::Text(" ".into())));
++        events.clear();
++        bridge.record(&key(76, true, 0), false, true, &mut events).unwrap();
++        assert!(!events.iter().any(|e| matches!(e, Event::Key { .. })));
++        assert!(bridge.held.is_empty());
++    }
++    #[test]
++    fn clipboard_and_focus_loss_are_single_events_not_duplicate_key_commands() {
++        let mut bridge = Keyboard::new();
++        let mut events = vec![];
++        bridge.record(&json!({"kind":"paste","code":25,"down":true,"flags":1<<20,"text":"hello"}), true, false, &mut events).unwrap();
++        assert_eq!(events.iter().filter(|e| matches!(e, Event::Paste(_))).count(), 1);
++        assert!(!events.iter().any(|e| matches!(e, Event::Key { pressed: true, .. })));
++        bridge.record(&key(44, true, 0), false, false, &mut events).unwrap();
++        events.clear();
++        bridge.record(&json!({"kind":"reset"}), false, false, &mut events).unwrap();
++        assert!(events.contains(&Event::WindowFocused(false)));
++        assert!(!events.iter().any(|e| matches!(e, Event::Key { key: Key::Space, pressed: false, .. })));
++    }
++    #[test]
++    fn translated_text_and_clipboard_edit_the_focused_widget_once() {
++        let ctx = egui::Context::default();
++        let id = egui::Id::new("keyboard-test-text");
++        let mut text = String::new();
++        let mut output = ctx.run_ui(Default::default(), |ui| {
++            egui::CentralPanel::default().show(ui, |ui| {
++                ui.add(egui::TextEdit::singleline(&mut text).id(id));
++            });
++            ui.ctx().memory_mut(|m| m.request_focus(id));
++        });
++        output.textures_delta.clear();
++        let mut bridge = Keyboard::new();
++        let mut events = vec![];
++        let mut space = key(44, true, 0);
++        space["text"] = json!(" ");
++        bridge.record(&space, true, false, &mut events).unwrap();
++        bridge.record(&key(44, false, 0), true, false, &mut events).unwrap();
++        bridge.record(&json!({"kind":"paste","code":25,"down":true,"flags":1<<20,"text":"hello"}), true, false, &mut events).unwrap();
++        let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
++            egui::CentralPanel::default().show(ui, |ui| {
++                ui.add(egui::TextEdit::singleline(&mut text).id(id));
++            });
++        });
++        output.textures_delta.clear();
++        assert_eq!(text, " hello");
++    }
++    #[test]
++    fn malformed_records_and_oversized_clipboard_are_recoverable() {
++        let mut bridge = Keyboard::new();
++        let mut events = vec![];
++        assert!(bridge.record(&json!({"kind":"key","code":u64::MAX,"down":true}), false, false, &mut events).is_err());
++        assert!(bridge.record(&json!({"kind":"paste","code":25,"down":true,"text":"x".repeat(MAX_CLIPBOARD+1)}), true, false, &mut events).is_err());
++    }
++}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 0000000..ae781db
+index 00000000..15fa239a
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,97 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
 +//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -994,6 +1367,8 @@ index 0000000..ae781db
 +mod diagnostics;
 +mod files;
 +mod journal;
++mod key_codes;
++mod keyboard;
 +mod native_documents;
 +mod project_zip;
 +
@@ -1002,7 +1377,7 @@ index 0000000..ae781db
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=8 startup workers=1 preview_mib=1024 disk_gib=1 direct_files=true");
++    log::info!(target: "effectcraft_diagnostics", "build=9 startup workers=1 preview_mib=1024 disk_gib=1 hardware_keyboard=true");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1045,7 +1420,7 @@ index 0000000..ae781db
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 8: Open creates a local project copy. Use Save As for another location. RAM cache: 1 GiB.".to_string(),
++                Ok(_) => "Build 9: hardware keyboard input. Space: preview; Cmd/Ctrl+Z: undo; Cmd/Ctrl+S: save. RAM: 1 GiB.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -1069,6 +1444,7 @@ index 0000000..ae781db
 +            Ok(Box::new(diagnostics::DiagnosticApp {
 +                app,
 +                files,
++                keyboard: keyboard::Keyboard::new(),
 +                directory,
 +                startup_error,
 +                open: false,
@@ -1081,7 +1457,7 @@ index 0000000..ae781db
 +}
 diff --git a/apps/effectcraft-ios/src/native_documents.rs b/apps/effectcraft-ios/src/native_documents.rs
 new file mode 100644
-index 0000000..b52639d
+index 00000000..d3ab29d7
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/native_documents.rs
 @@ -0,0 +1,190 @@
@@ -1277,7 +1653,7 @@ index 0000000..b52639d
 +}
 diff --git a/apps/effectcraft-ios/src/project_zip.rs b/apps/effectcraft-ios/src/project_zip.rs
 new file mode 100644
-index 0000000..03464fe
+index 00000000..03464fe5
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/project_zip.rs
 @@ -0,0 +1,211 @@
@@ -1493,7 +1869,7 @@ index 0000000..03464fe
 +    }
 +}
 diff --git a/apps/effectcraft-web/Cargo.toml b/apps/effectcraft-web/Cargo.toml
-index 6c30f9a..ef49f78 100644
+index 6c30f9a5..ef49f78f 100644
 --- a/apps/effectcraft-web/Cargo.toml
 +++ b/apps/effectcraft-web/Cargo.toml
 @@ -26,6 +26,7 @@ effectcraft-media = { workspace = true }
@@ -1505,7 +1881,7 @@ index 6c30f9a..ef49f78 100644
  eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
  log = { workspace = true }
 diff --git a/apps/effectcraft-web/js/host.js b/apps/effectcraft-web/js/host.js
-index 3db6ad3..cd7e509 100644
+index 3db6ad35..cd7e509c 100644
 --- a/apps/effectcraft-web/js/host.js
 +++ b/apps/effectcraft-web/js/host.js
 @@ -685,3 +685,46 @@ export function showDeviceLost(message, kept) {
@@ -1556,7 +1932,7 @@ index 3db6ad3..cd7e509 100644
 +  bridge.runCommand(command);
 +}
 diff --git a/apps/effectcraft-web/src/api.rs b/apps/effectcraft-web/src/api.rs
-index 793e557..37e836a 100644
+index 793e557c..37e836a7 100644
 --- a/apps/effectcraft-web/src/api.rs
 +++ b/apps/effectcraft-web/src/api.rs
 @@ -83,6 +83,18 @@ pub fn add_file(name: String, data: js_sys::Uint8Array) -> String {
@@ -1587,7 +1963,7 @@ index 793e557..37e836a 100644
      v["workers"] = from_js(&crate::worker::stats());
      v["audio"] = from_js(&crate::audio::state());
 diff --git a/apps/effectcraft-web/src/app.rs b/apps/effectcraft-web/src/app.rs
-index 1a69524..70d1814 100644
+index 1a695240..70d18143 100644
 --- a/apps/effectcraft-web/src/app.rs
 +++ b/apps/effectcraft-web/src/app.rs
 @@ -15,6 +15,10 @@ use wasm_bindgen::prelude::*;
@@ -1670,7 +2046,7 @@ index 1a69524..70d1814 100644
          .await?;
 diff --git a/apps/effectcraft-web/src/fonts.rs b/apps/effectcraft-web/src/fonts.rs
 new file mode 100644
-index 0000000..7d39b71
+index 00000000..7d39b717
 --- /dev/null
 +++ b/apps/effectcraft-web/src/fonts.rs
 @@ -0,0 +1,80 @@
@@ -1755,7 +2131,7 @@ index 0000000..7d39b71
 +    app.session.revision = app.session.revision.saturating_add(1);
 +}
 diff --git a/apps/effectcraft-web/src/frames.rs b/apps/effectcraft-web/src/frames.rs
-index 523fd03..7400333 100644
+index 523fd03c..74003339 100644
 --- a/apps/effectcraft-web/src/frames.rs
 +++ b/apps/effectcraft-web/src/frames.rs
 @@ -116,13 +116,16 @@ impl WebFrames {
@@ -1778,7 +2154,7 @@ index 523fd03..7400333 100644
              }
              let sync = w.mirror.sync(job.revision, &job.project);
 diff --git a/apps/effectcraft-web/src/lib.rs b/apps/effectcraft-web/src/lib.rs
-index 0d59906..e5b356a 100644
+index 0d59906f..e5b356ae 100644
 --- a/apps/effectcraft-web/src/lib.rs
 +++ b/apps/effectcraft-web/src/lib.rs
 @@ -37,6 +37,8 @@ pub mod diskcache;
@@ -1791,7 +2167,7 @@ index 0d59906..e5b356a 100644
  #[cfg(target_arch = "wasm32")]
  pub mod persist;
 diff --git a/apps/effectcraft-web/src/persist.rs b/apps/effectcraft-web/src/persist.rs
-index a2345cc..efd4c77 100644
+index a2345cc3..efd4c777 100644
 --- a/apps/effectcraft-web/src/persist.rs
 +++ b/apps/effectcraft-web/src/persist.rs
 @@ -236,6 +236,7 @@ pub fn register_media(pool: &effectcraft_media::MediaPool) -> usize {
@@ -1803,7 +2179,7 @@ index a2345cc..efd4c77 100644
          {
              pool.add_bytes(&path, d);
 diff --git a/apps/effectcraft-web/src/worker.rs b/apps/effectcraft-web/src/worker.rs
-index bd86fd5..d93989f 100644
+index bd86fd5d..d93989f5 100644
 --- a/apps/effectcraft-web/src/worker.rs
 +++ b/apps/effectcraft-web/src/worker.rs
 @@ -59,9 +59,9 @@ impl Offload for WorkerOffload {
@@ -1849,7 +2225,7 @@ index bd86fd5..d93989f 100644
  /// A job worker's GPU (called once by `web/worker.js` after `workerInit`): with `gpu` and
 diff --git a/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js b/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js
 new file mode 100644
-index 0000000..4cff78f
+index 00000000..4cff78f8
 --- /dev/null
 +++ b/apps/effectcraft-web/web/effectcraft-bridge-ipad.070.js
 @@ -0,0 +1,460 @@
@@ -2314,7 +2690,7 @@ index 0000000..4cff78f
 +  };
 +})();
 diff --git a/apps/effectcraft-web/web/index.html b/apps/effectcraft-web/web/index.html
-index 70ab93f..19edc8a 100644
+index 70ab93ff..19edc8a4 100644
 --- a/apps/effectcraft-web/web/index.html
 +++ b/apps/effectcraft-web/web/index.html
 @@ -38,11 +38,476 @@
@@ -2808,7 +3184,7 @@ index 70ab93f..19edc8a 100644
          let bytes;
          if (typeof fileOrUrl === "string") {
 diff --git a/crates/engine/src/commands/edit.rs b/crates/engine/src/commands/edit.rs
-index 06ba43b..27b5e57 100644
+index 06ba43b1..27b5e57c 100644
 --- a/crates/engine/src/commands/edit.rs
 +++ b/crates/engine/src/commands/edit.rs
 @@ -790,6 +790,7 @@ pub(crate) fn disk_stats(s: &mut Session, _: &Value) -> Result<Value> {
@@ -2820,7 +3196,7 @@ index 06ba43b..27b5e57 100644
  }
  
 diff --git a/crates/engine/src/commands/layer.rs b/crates/engine/src/commands/layer.rs
-index ca8aa86..8ab829d 100644
+index ca8aa865..8ab829df 100644
 --- a/crates/engine/src/commands/layer.rs
 +++ b/crates/engine/src/commands/layer.rs
 @@ -927,10 +927,40 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
@@ -2927,7 +3303,7 @@ index ca8aa86..8ab829d 100644
                  }
              }
 diff --git a/crates/engine/src/logging.rs b/crates/engine/src/logging.rs
-index 2c89466..c4f5517 100644
+index 2c89466a..c4f55179 100644
 --- a/crates/engine/src/logging.rs
 +++ b/crates/engine/src/logging.rs
 @@ -278,6 +278,12 @@ impl Sink {
@@ -2944,7 +3320,7 @@ index 2c89466..c4f5517 100644
  }
  
 diff --git a/crates/engine/src/session_settings.rs b/crates/engine/src/session_settings.rs
-index 55c8e41..39cd42e 100644
+index 55c8e415..39cd42e5 100644
 --- a/crates/engine/src/session_settings.rs
 +++ b/crates/engine/src/session_settings.rs
 @@ -131,7 +131,9 @@ impl Session {
@@ -2959,7 +3335,7 @@ index 55c8e41..39cd42e 100644
          // disk cache off drops it).
          let store: std::sync::Arc<dyn effectcraft_effects::roto::SegStore> = dc.clone();
 diff --git a/crates/media/src/pool.rs b/crates/media/src/pool.rs
-index 98c7071..13b35eb 100644
+index 98c70710..13b35eb0 100644
 --- a/crates/media/src/pool.rs
 +++ b/crates/media/src/pool.rs
 @@ -45,6 +45,8 @@ struct Key {
@@ -3081,7 +3457,7 @@ index 98c7071..13b35eb 100644
          for i in 0..10 {
              c.insert(k(i), img(), budget);
 diff --git a/crates/render/src/disk_cache.rs b/crates/render/src/disk_cache.rs
-index 4140b79..a12fae7 100644
+index 4140b792..a12fae71 100644
 --- a/crates/render/src/disk_cache.rs
 +++ b/crates/render/src/disk_cache.rs
 @@ -34,6 +34,9 @@ const MAGIC: &[u8; 4] = b"ECDC";
@@ -3334,7 +3710,7 @@ index 4140b79..a12fae7 100644
          let d = std::env::temp_dir().join(format!("effectcraft-disk-cache-{name}-{}", std::process::id()));
          let _ = std::fs::remove_dir_all(&d);
 diff --git a/crates/text/src/fonts.rs b/crates/text/src/fonts.rs
-index d555954..493b934 100644
+index d555954c..493b9340 100644
 --- a/crates/text/src/fonts.rs
 +++ b/crates/text/src/fonts.rs
 @@ -336,10 +336,34 @@ pub fn add_font_data(data: Vec<u8>) -> Vec<FaceId> {
@@ -3398,7 +3774,7 @@ index d555954..493b934 100644
  }
  
 diff --git a/crates/text/src/layout.rs b/crates/text/src/layout.rs
-index c150321..be6f1b4 100644
+index c1503215..be6f1b4f 100644
 --- a/crates/text/src/layout.rs
 +++ b/crates/text/src/layout.rs
 @@ -1028,6 +1028,10 @@ pub fn layout_rich_uncached(text: &str, runs: &[(Range<usize>, TextStyle)], para
@@ -3413,7 +3789,7 @@ index c150321..be6f1b4 100644
      static C: OnceLock<Mutex<HashMap<u64, (u64, Arc<Layout>)>>> = OnceLock::new();
      C.get_or_init(Default::default)
 diff --git a/crates/ui-egui/src/frames.rs b/crates/ui-egui/src/frames.rs
-index 059bc3a..a297b4a 100644
+index 059bc3a0..a297b4a5 100644
 --- a/crates/ui-egui/src/frames.rs
 +++ b/crates/ui-egui/src/frames.rs
 @@ -40,9 +40,19 @@ const MAX_KEEPERS: usize = 64;
@@ -3633,7 +4009,7 @@ index 059bc3a..a297b4a 100644
      #[test]
      fn disk_indicator_does_not_hash_on_ui_thread_and_coalesces_edits() {
 diff --git a/crates/ui-egui/src/header.rs b/crates/ui-egui/src/header.rs
-index fb381cf..9bd1cfb 100644
+index fb381cfd..9bd1cfb9 100644
 --- a/crates/ui-egui/src/header.rs
 +++ b/crates/ui-egui/src/header.rs
 @@ -1,15 +1,14 @@
@@ -3708,7 +4084,7 @@ index fb381cf..9bd1cfb 100644
      let (icon, mode) = match app.session.prefs.appearance.appearance_mode.as_str() {
          "auto" => (Icon::Monitor, tr("Sync with System")),
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 105a075..9808c7f 100644
+index 105a075e..9808c7f3 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
 @@ -144,6 +144,9 @@ pub struct Hooks {
@@ -3779,7 +4155,7 @@ index 105a075..9808c7f 100644
              }
              pending = true;
 diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
-index 8b5fd1c..6c5d8bd 100644
+index 8b5fd1c3..6c5d8bd7 100644
 --- a/crates/ui-egui/src/menus.rs
 +++ b/crates/ui-egui/src/menus.rs
 @@ -12,6 +12,57 @@ use crate::dock::PanelKind;
@@ -4027,7 +4403,7 @@ index 8b5fd1c..6c5d8bd 100644
      fn every_ui_shortcut_parses() {
          for c in UI_COMMANDS {
 diff --git a/crates/ui-egui/src/panels/text_panels.rs b/crates/ui-egui/src/panels/text_panels.rs
-index ae2294f..7436fbe 100644
+index ae2294f1..7436fbe0 100644
 --- a/crates/ui-egui/src/panels/text_panels.rs
 +++ b/crates/ui-egui/src/panels/text_panels.rs
 @@ -593,6 +593,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
@@ -4085,7 +4461,7 @@ index ae2294f..7436fbe 100644
                                  let pts: Vec<egui::Pos2> =
                                      poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
-index 163e650..3d87570 100644
+index 163e6507..3d875706 100644
 --- a/crates/ui-egui/src/panels/timeline.rs
 +++ b/crates/ui-egui/src/panels/timeline.rs
 @@ -72,7 +72,7 @@ pub(crate) fn bar_color(label: Color32, selected: bool) -> Color32 {
@@ -4173,7 +4549,7 @@ index 163e650..3d87570 100644
      if let (Some(start), Some(end)) = (ctx.input(|i| i.pointer.press_origin()), outline_empty.interact_pointer_pos())
          && outline_empty.dragged()
 diff --git a/xtask/src/main.rs b/xtask/src/main.rs
-index 4d541fe..c8af9c0 100644
+index 4d541feb..c8af9c02 100644
 --- a/xtask/src/main.rs
 +++ b/xtask/src/main.rs
 @@ -60,6 +60,7 @@ const LAYERS: &[(&str, u8)] = &[

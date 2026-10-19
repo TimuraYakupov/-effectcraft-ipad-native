@@ -20,13 +20,13 @@ def package(root: Path) -> Path:
     if platforms != [["IOS"]]:
         raise ValueError("Binary is not built for an iOS device")
     plist = {
-        "CFBundleDisplayName": "EC Native Preview 8",
+        "CFBundleDisplayName": "EC Native Preview 9",
         "CFBundleName": "EffectCraft Native Preview",
         "CFBundleIdentifier": "com.effectcraft.ipad.nativepreview",
         "CFBundleExecutable": "EffectCraftNative",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "0.10.0",
-        "CFBundleVersion": "8",
+        "CFBundleVersion": "9",
         "MinimumOSVersion": "16.0",
         "UIDeviceFamily": [2],
         "CFBundleSupportedPlatforms": ["iPhoneOS"],
@@ -58,7 +58,7 @@ def package(root: Path) -> Path:
     }
     out = root / "output"
     out.mkdir(exist_ok=True)
-    ipa = out / "EffectCraft-Native-Preview-8.ipa"
+    ipa = out / "EffectCraft-Native-Preview-9.ipa"
     prefix = "Payload/EffectCraftNative.app/"
     with zipfile.ZipFile(ipa, "w", zipfile.ZIP_DEFLATED) as archive:
         executable = zipfile.ZipInfo(prefix + "EffectCraftNative")

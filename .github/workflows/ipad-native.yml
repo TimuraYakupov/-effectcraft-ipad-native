@@ -43,13 +43,17 @@ jobs:
           /tmp/ec-journal-tests
           rustc +1.95.0 --edition 2024 --test effectcraft/apps/effectcraft-ios/src/project_zip.rs -o /tmp/ec-project-zip-tests
           /tmp/ec-project-zip-tests
+          cp effectcraft/apps/effectcraft-ios/src/key_codes.rs tests/hardware-keys/src/key_codes.rs
+          cp effectcraft/apps/effectcraft-ios/src/keyboard.rs tests/hardware-keys/src/keyboard.rs
+          cargo +1.95.0 test --locked --manifest-path tests/hardware-keys/Cargo.toml
           python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Compile iPad Files platform module
         run: |
           xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -fobjc-arc -fmodules -Wall -Wextra -c platform/EffectCraftDocuments.m -o /tmp/effectcraft-documents.o
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -fobjc-arc -fmodules -Wall -Wextra -c platform/EffectCraftKeyboard.m -o /tmp/effectcraft-keyboard.o
       - name: Compile native ARM64 app
         working-directory: effectcraft
-        run: cargo +1.95.0 rustc --locked --release --target aarch64-apple-ios -p effectcraft-ios -- -C link-arg=/tmp/effectcraft-documents.o -C link-arg=-framework -C link-arg=UIKit -C link-arg=-framework -C link-arg=Foundation -C link-arg=-framework -C link-arg=UniformTypeIdentifiers
+        run: cargo +1.95.0 rustc --locked --release --target aarch64-apple-ios -p effectcraft-ios -- -C link-arg=/tmp/effectcraft-documents.o -C link-arg=/tmp/effectcraft-keyboard.o -C link-arg=-framework -C link-arg=UIKit -C link-arg=-framework -C link-arg=Foundation -C link-arg=-framework -C link-arg=UniformTypeIdentifiers
       - name: Package unsigned IPA
         run: python3 scripts/package_ipa.py
       - name: Upload IPA and build details

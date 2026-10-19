@@ -1,0 +1,11 @@
+[package]
+name = "effectcraft-ipad-keyboard-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+egui = { version = "=0.36.2", default-features = false, features = ["default_fonts"] }
+serde_json = "1"
+
+[workspace]

@@ -1,5 +1,22 @@
 # EffectCraft native iPad preview
 
+## Preview build 9: hardware keyboard
+
+The user confirmed project opening, saving and import in build 8. Build 9 adds
+hardware key-down/key-up delivery to the native egui host. Space taps preview;
+holding Space keeps the existing Hand-tool behavior. Cmd/Ctrl+Z, Shift+Z, C/X/V,
+S, arrows and Delete/Backspace use the editor's existing shortcut handlers.
+Printable text continues through UIKit while a text editor owns focus. Clipboard
+text is bounded to 128 KiB; the event backlog is bounded and resets on focus loss.
+UIKit document pickers retain their normal keyboard handling. Host file/diagnostic
+dialogs suppress project commands while allowing focused text entry.
+
+This wraps only WinitUIWindow's inherited public sendEvent: method; it does not
+replace UIKit's global event handling. The file bridge remains DocumentBridge8;
+keyboard state uses Keyboard9. RAM remains 1 GiB, disk cache 1 GiB, one worker.
+Output: `EffectCraft-Native-Preview-9.ipa`, bundle build 9, same preview identity.
+Physical keyboard behavior still needs confirmation on the user's iPad.
+
 ## Preview build 8: copy-based project opening
 
 The supplied device recording shows file selection but the Files window does not
@@ -171,7 +188,7 @@ portable Bridge ZIP export and audio output are not yet connected in this fronte
 Push this build repository to GitHub. The first push starts the build automatically;
 later builds can also be started with **Actions → Native iPad preview → Run workflow**.
 The standard `macos-15` runner builds an unsigned ARM64 iOS executable and packages
-`EffectCraft-Native-Preview-7.ipa` as an Actions artifact. No Apple signing key is needed
+`EffectCraft-Native-Preview-9.ipa` as an Actions artifact. No Apple signing key is needed
 for this unsigned output. Previous builds launched in LiveContainer on the test iPad.
 The preview uses `com.effectcraft.ipad.nativepreview`, separate from the stable app.
 
