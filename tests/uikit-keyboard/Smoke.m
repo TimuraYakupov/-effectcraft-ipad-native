@@ -100,7 +100,7 @@ static void After(double seconds, dispatch_block_t block) {
             Check([records[3][@"code"] integerValue]==22 && ([records[3][@"flags"] unsignedLongLongValue]&UIKeyModifierCommand), @"Cmd S modifiers delivered");
             State(YES,NO);
             After(0.3, ^{
-                Check([TestWindow.rootViewController.view becomeFirstResponder], @"text view can take IME focus");
+                Check(TestWindow.rootViewController.view.isFirstResponder, @"IME state automatically restores text focus");
                 After(0.3, ^{
                     Check(TestWindow.rootViewController.view.isFirstResponder, @"hardware controller does not steal text focus");
                     Check(!ECKHandle(TestWindow.rootViewController.view,Press(44,YES,0)), @"ordinary text is left to UIKit UIKeyInput");
@@ -114,7 +114,21 @@ static void After(double seconds, dispatch_block_t block) {
                             NSData *data=[NSData dataWithContentsOfURL:[TestRoot URLByAppendingPathComponent:@"native.status"]];
                             NSDictionary *status=data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
                             Check([status[@"native_presses"] unsignedLongLongValue]>=5 && [status[@"state"] isEqual:@"Ready"], @"live native diagnostics reports focus and key delivery");
-                            Finish(nil);
+                            UIViewController *guest=TestWindow.rootViewController;
+                            UIViewController *host=[UIViewController new];
+                            TestWindow.rootViewController=host;
+                            [host presentViewController:guest animated:NO completion:^{
+                                After(0.5, ^{
+                                    Check(guest.isFirstResponder && ECKGuest==guest, @"guest presented inside a host retains hardware focus");
+                                    Check(ECKHandle(guest,Press(44,YES,0)), @"host presentation does not block guest key capture");
+                                    [guest presentViewController:[UIViewController new] animated:NO completion:^{
+                                        After(0.5, ^{
+                                            Check(!ECKHandle(guest,Press(44,YES,0)), @"guest system modal still blocks editor keys");
+                                            Finish(nil);
+                                        });
+                                    }];
+                                });
+                            }];
                         });
                     });
                 });

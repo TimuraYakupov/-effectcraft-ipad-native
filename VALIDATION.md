@@ -21,6 +21,10 @@ down/repeat/up records, Cmd+S modifiers, text-focus handoff, file-dialog exclusi
 focus recovery and native status. Key payloads are synthetic test doubles sent
 through the installed UIKit responder methods; real iPad/LiveContainer keyboard
 delivery is explicitly not claimed by this smoke test.
+The smoke also covers a guest presented inside a host controller and a system
+modal presented by the guest. IME focus is restored if the hardware controller
+still owns it, including an out-of-date queued state; software-keyboard dismissal
+does not trigger unconditional text-view refocusing.
 
 ## Preview build 9 — 2026-10-19
 

@@ -12,6 +12,7 @@ static BOOL ECKInstalled[2];
 static unsigned long long ECKSeen;
 static NSInteger ECKLastCode;
 static NSTimeInterval ECKLastStatus;
+static __weak UIViewController *ECKGuest;
 static NSString *ECKSession;
 static NSURL *ECKRoot;
 static BOOL ECKText;
@@ -71,7 +72,7 @@ static BOOL ECKHandle(id responder, NSSet<UIPress *> *presses) {
     // A presented UIKit controller (Files, share sheets) owns its keyboard.
     if (!ECKSession || ECKBlocked || !view.isKeyWindow ||
         UIApplication.sharedApplication.applicationState != UIApplicationStateActive ||
-        view.rootViewController.presentedViewController || !presses.count || presses.count > 32) return NO;
+        ECKGuest.presentedViewController || !presses.count || presses.count > 32) return NO;
     // Never forward a partially handled batch: that would duplicate key/text events.
     for (UIPress *press in presses) {
         UIKey *key = press.key;
@@ -164,7 +165,7 @@ static UIViewController *ECKController(UIViewController *controller, NSUInteger 
         UIViewController *found = ECKController(child, remaining);
         if (found) return found;
     }
-    return nil;
+    return ECKController(controller.presentedViewController, remaining);
 }
 static UIViewController *ECKFind(void) {
     NSUInteger remaining = 64;
@@ -190,11 +191,16 @@ static UIViewController *ECKFind(void) {
 static void ECKActivate(void) {
     ECKInstall();
     UIViewController *controller = ECKFind();
+    ECKGuest = controller;
     UIWindow *window = controller.view.window;
     BOOL active = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
-    BOOL modal = window.rootViewController.presentedViewController != nil;
-    if (ECKInstalled[1] && !ECKText && !ECKBlocked && window.isKeyWindow && active && !modal && !controller.isFirstResponder)
-        [controller becomeFirstResponder];
+    BOOL modal = controller.presentedViewController != nil;
+    if (ECKInstalled[1] && !ECKBlocked && window.isKeyWindow && active && !modal && (!ECKText || controller.isFirstResponder)) {
+        // egui debounces set_ime_allowed. A queued old state must not steal its
+        // one-time IME focus; reconcile both directions when fresh state arrives.
+        UIResponder *target = ECKText ? controller.view : controller;
+        if (!target.isFirstResponder) [target becomeFirstResponder];
+    }
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     if (now - ECKLastStatus < 0.25) return;
     ECKLastStatus = now;

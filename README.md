@@ -14,6 +14,8 @@ Diagnostics shows UIKit hook/focus state, native press count, editor received
 count and last HID code. Pressing keys there updates counters without running
 project commands. An iPad Simulator smoke app tests the actual production UIKit
 module, responder focus, Space down/repeat/up, Cmd+S and IME/dialog recovery.
+It also checks automatic IME focus recovery and a guest presented by a host
+controller, while keeping the guest's own modal dialogs protected.
 It uses test doubles for key payloads; it does not prove real hardware/LiveContainer
 delivery. That still needs the user's physical iPad check.
 
