@@ -1,4 +1,4 @@
-# EffectCraft for iPad — build 13
+# EffectCraft for iPad — build 14
 
 A native ARM64 iPad editor built from EffectCraft 0.10.0, pinned at
 `05955c08b4fd025f1a09882df72e6dbff1a8148a`. Rust/egui runs over Metal without a
@@ -7,7 +7,7 @@ WebView. Builds run on GitHub Actions macOS runners; a local Mac is not required
 ## Build and install
 
 Open Actions → Native iPad preview → the latest successful run. Download the
-EffectCraft-Native-Preview artifact and extract `EffectCraft-0.10.0-iPad-Build-13.ipa`.
+EffectCraft-Native-Preview artifact and extract `EffectCraft-0.10.0-iPad-Build-14.ipa`.
 This is an unsigned device build for the existing LiveContainer installation
 workflow. Keep the same app/container identity to retain projects and settings.
 It is not an App Store or TestFlight distribution.
@@ -54,5 +54,12 @@ projects, media or Apple-proprietary artwork are bundled in this repository.
 
 
 
-Build 13 uses the display name **EffectCraft**, retaining the existing bundle ID and storage.
-Diagnostics and cache budget controls are available in **Help → Diagnostics…**; there is no permanent overlay button. Existing installations switch to 2 GiB RAM preview once on upgrade, then retain later manual choices. Physical primary mouse touches now have an owned down/move/up/cancel path, without duplicate touchscreen events. The simulator checks pointer capture and touch/Pencil/secondary fallback, and frontend regression tests import WAV media then drag it from Project into the Composition viewer and Timeline. Physical iPad/LiveContainer pointer behavior still needs device validation.
+Build 14 keeps the display name **EffectCraft**, the 2 GiB RAM preview limit and
+**Help → Diagnostics…**. It removes build 13's replacement of WinitUIView touch
+methods after a device report that mouse actions stopped working. Primary input
+again follows the native winit path from build 12; keyboard, hover and secondary
+click retain that version's bridge. This hotfix does not claim to resolve the
+original imported-media drag issue. UIKit smoke checks assert that all four
+native touch methods remain unchanged after bridge installation, including when
+the editor is presented inside a host. Physical iPad/LiveContainer mouse behavior
+still requires device validation.

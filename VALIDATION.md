@@ -230,3 +230,21 @@ bundle, not a production release or an upstream pull request.
 - Primary mouse down/move/up/cancel uses one UIKit-to-egui pointer stream; winit does not also receive captured indirect-pointer touches. Hover exit cannot cancel a held primary drag. Finger, Pencil, secondary buttons and system modals keep their routing.
 - Simulator exercises production pointer hooks. Frontend tests import a synthetic WAV, drag it across panels and check that exactly one editable footage layer appears in either Composition or Timeline.
 - Validate a physical mouse/trackpad on iPad; simulator test doubles cannot establish hardware delivery inside LiveContainer.
+
+## EffectCraft iPad build 14 — mouse regression hotfix
+
+Device feedback: mouse actions stopped working in build 13. Revert its Objective-C
+primary-touch interception to the exact build-12 platform bridge. No replacement
+of WinitUIView touchesBegan/Moved/Ended/Cancelled remains. This restores the prior
+native delivery design; physical-device recovery is not established by CI.
+
+UIKit smoke now checks original method identities before/after repeated bridge
+installation and forwards mouse, finger and Pencil begin/move/end/cancel events
+unchanged. It repeats these checks with the editor presented inside a host,
+alongside existing keyboard focus, IME, hover and right-click checks.
+
+Keep 2 GiB RAM preview, Help diagnostics and EffectCraft naming. The source
+migration marker remains v13 so a manual cache setting is not reset again.
+Frontend synthetic pointer tests remain useful translation/editor checks, but
+do not validate hardware routing. The original imported-media drag issue remains
+a separate device verification item.

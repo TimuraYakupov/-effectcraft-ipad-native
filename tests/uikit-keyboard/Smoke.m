@@ -5,7 +5,10 @@ static UIWindow *TestWindow;
 static NSURL *TestRoot;
 static NSString *TestSession;
 static NSMutableArray<NSString *> *Checks;
-static NSUInteger ForwardedTouches;
+static NSUInteger NativeTouches[4];
+static IMP NativeTouchMethods[4];
+static NSSet *LastNativeTouches;
+static UIEvent *LastNativeEvent;
 
 @interface WinitUIView : UIView <UIKeyInput>
 @end
@@ -14,10 +17,10 @@ static NSUInteger ForwardedTouches;
 - (BOOL)hasText { return YES; }
 - (void)insertText:(NSString *)text { (void)text; }
 - (void)deleteBackward {}
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)event; ForwardedTouches += touches.count; }
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)event; ForwardedTouches += touches.count; }
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)event; ForwardedTouches += touches.count; }
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)event; ForwardedTouches += touches.count; }
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { NativeTouches[0]++; LastNativeTouches=touches; LastNativeEvent=event; }
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { NativeTouches[1]++; LastNativeTouches=touches; LastNativeEvent=event; }
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { NativeTouches[2]++; LastNativeTouches=touches; LastNativeEvent=event; }
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { NativeTouches[3]++; LastNativeTouches=touches; LastNativeEvent=event; }
 @end
 @interface WinitUIViewController : UIViewController
 @end
@@ -47,20 +50,6 @@ static NSUInteger ForwardedTouches;
 @end
 @implementation TestPointer
 - (CGPoint)locationInView:(UIView *)view { (void)view; return self.point; }
-@end
-
-@interface TestTouch : NSObject
-@property(nonatomic) UITouchType type;
-@property(nonatomic) CGPoint point;
-- (CGPoint)locationInView:(UIView *)view;
-@end
-@implementation TestTouch
-- (CGPoint)locationInView:(UIView *)view { (void)view; return self.point; }
-@end
-@interface TestMouseEvent : NSObject
-@property(nonatomic) UIEventButtonMask buttonMask;
-@end
-@implementation TestMouseEvent
 @end
 
 static void Finish(NSString *error) {
@@ -98,41 +87,55 @@ static NSArray<NSDictionary *> *Records(void) {
 static void After(double seconds, dispatch_block_t block) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds*NSEC_PER_SEC)), dispatch_get_main_queue(), block);
 }
-static void TestPrimaryPointer(UIView *view, dispatch_block_t done) {
-    Check(ECKTouchInstalled, @"primary mouse touch hooks installed");
-    NSUInteger before = Records().count;
-    ForwardedTouches = 0;
-    TestTouch *touch = [TestTouch new]; touch.type = UITouchTypeIndirectPointer; touch.point = CGPointMake(120,200);
-    TestMouseEvent *event = [TestMouseEvent new]; event.buttonMask = UIEventButtonMaskPrimary;
-    NSSet<UITouch *> *touches = (NSSet<UITouch *> *)[NSSet setWithObject:touch];
-    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
-    TestPointer *hover = [TestPointer new]; hover.state = UIGestureRecognizerStateEnded;
-    [ECKMouse hovering:(UIHoverGestureRecognizer *)(id)hover];
-    touch.point = CGPointMake(400,600);
-    [view touchesMoved:touches withEvent:(UIEvent *)(id)event];
-    event.buttonMask = 0;
-    [view touchesEnded:touches withEvent:(UIEvent *)(id)event];
-    event.buttonMask = UIEventButtonMaskPrimary;
-    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
-    [view touchesCancelled:touches withEvent:(UIEvent *)(id)event];
-    Check(ForwardedTouches == 0, @"captured primary touches never also reach winit");
-    touch.type = UITouchTypeDirect;
-    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
-    touch.type = UITouchTypeStylus;
-    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
-    touch.type = UITouchTypeIndirectPointer; event.buttonMask = UIEventButtonMaskSecondary;
-    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
-    Check(ForwardedTouches == 3, @"finger Pencil and secondary touches retain original routing");
-    After(0.3, ^{
-        NSArray<NSDictionary *> *records = Records();
-        Check(records.count == before + 5, @"primary drag and cancellation produce five ordered records without hover exit");
-        NSArray *drag = [records subarrayWithRange:NSMakeRange(before,5)];
-        Check([drag[0][@"button"] isEqual:@"primary"] && [drag[0][@"down"] boolValue] &&
-            [drag[1][@"x"] doubleValue] == 400 && !drag[1][@"down"] && ![drag[2][@"down"] boolValue], @"primary down move up survive crossing panels");
-        Check([drag[4][@"phase"] isEqual:@"cancel"] && !ECKPrimaryDown, @"cancel releases primary mouse ownership");
-        done();
-    });
+// Assert that keyboard installation cannot replace the native touch delivery path.
+// These responder doubles test routing, not physical pointer behavior.
+@interface TestTouch : NSObject
+@property(nonatomic) UITouchType type;
+@end
+@implementation TestTouch
+@end
+@interface TestMouseEvent : NSObject
+@property(nonatomic) UIEventButtonMask buttonMask;
+@end
+@implementation TestMouseEvent
+@end
+static SEL NativeTouchSelector(NSUInteger phase) {
+    switch (phase) {
+        case 0: return @selector(touchesBegan:withEvent:);
+        case 1: return @selector(touchesMoved:withEvent:);
+        case 2: return @selector(touchesEnded:withEvent:);
+        default: return @selector(touchesCancelled:withEvent:);
+    }
 }
+static void TestNativeTouchDelivery(UIView *view) {
+    ECKInstall(); ECKInstall();
+    for (NSUInteger phase=0; phase<4; phase++) {
+        Check(class_getMethodImplementation(WinitUIView.class, NativeTouchSelector(phase)) == NativeTouchMethods[phase],
+            @"repeated keyboard installation preserves original native touch implementations");
+        NativeTouches[phase]=0;
+    }
+    TestTouch *touch=[TestTouch new]; TestMouseEvent *event=[TestMouseEvent new];
+    for (NSNumber *type in @[@(UITouchTypeIndirectPointer), @(UITouchTypeDirect), @(UITouchTypeStylus)]) {
+        touch.type=type.integerValue;
+        for (NSNumber *button in @[@(UIEventButtonMaskPrimary), @(UIEventButtonMaskSecondary)]) {
+            event.buttonMask=button.unsignedIntegerValue;
+            NSSet *touches=[NSSet setWithObject:touch];
+            for (NSUInteger phase=0; phase<4; phase++) {
+                switch (phase) {
+                    case 0: [view touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)(id)event]; break;
+                    case 1: [view touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)(id)event]; break;
+                    case 2: [view touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)(id)event]; break;
+                    default: [view touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)(id)event]; break;
+                }
+                Check(LastNativeTouches==touches && LastNativeEvent==(UIEvent *)(id)event,
+                    @"native responder receives unchanged touch set and event");
+            }
+        }
+    }
+    for (NSUInteger phase=0; phase<4; phase++) Check(NativeTouches[phase]==6,
+        @"mouse finger and Pencil retain begin move end and cancellation");
+}
+
 // No delegate.window property and no scene manifest, matching winit's legacy lifecycle.
 @interface TestDelegate : UIResponder <UIApplicationDelegate>
 @end
@@ -145,9 +148,11 @@ static void TestPrimaryPointer(UIView *view, dispatch_block_t done) {
     TestWindow.rootViewController=[WinitUIViewController new];
     [TestWindow makeKeyAndVisible];
     Check(!TestWindow.rootViewController.canBecomeFirstResponder, @"controller cannot receive hardware keys before bridge installation");
+    for (NSUInteger phase=0; phase<4; phase++) NativeTouchMethods[phase]=class_getMethodImplementation(WinitUIView.class,NativeTouchSelector(phase));
     State(NO, NO);
     After(2.0, ^{
         Check(ECKInstalled[0] && ECKInstalled[1], @"both UIResponder hooks installed");
+        TestNativeTouchDelivery(TestWindow.rootViewController.view);
         Check(TestWindow.rootViewController.isFirstResponder, @"hardware controller owns keyboard focus without UIKeyInput");
         Check(![TestWindow.rootViewController conformsToProtocol:@protocol(UIKeyInput)], @"hardware focus does not request software keyboard");
         [TestWindow.rootViewController pressesBegan:Press(44,YES,0) withEvent:nil];
@@ -182,6 +187,7 @@ static void TestPrimaryPointer(UIView *view, dispatch_block_t done) {
                             [host presentViewController:guest animated:NO completion:^{
                                 After(0.5, ^{
                                     Check(guest.isFirstResponder && ECKGuest==guest, @"guest presented inside a host retains hardware focus");
+                                    TestNativeTouchDelivery(guest.view);
                                     Check(ECKHandle(guest,Press(44,YES,0)), @"host presentation does not block guest key capture");
                                     Check(ECKMouse.view==guest.view && ECKMouse.secondary.buttonMaskRequired==UIEventButtonMaskSecondary, @"hover and secondary click are installed on the guest view");
                                     TestPointer *pointer=[TestPointer new];pointer.point=CGPointMake(120,200);pointer.state=UIGestureRecognizerStateChanged;
@@ -192,14 +198,12 @@ static void TestPrimaryPointer(UIView *view, dispatch_block_t done) {
                                         for (NSDictionary *record in Records()) if ([record[@"kind"] isEqual:@"pointer"]) [pointerRecords addObject:record];
                                         Check(pointerRecords.count==3, @"hover and right click produce three ordered pointer records");
                                         Check([pointerRecords[0][@"x"] doubleValue]==120 && [pointerRecords[1][@"down"] boolValue] && ![pointerRecords[2][@"down"] boolValue], @"secondary down/up preserve hover coordinates");
-                                        TestPrimaryPointer(guest.view, ^{
-                                            [guest presentViewController:[UIViewController new] animated:NO completion:^{
-                                                After(0.5, ^{
-                                                    Check(!ECKHandle(guest,Press(44,YES,0)), @"guest system modal still blocks editor keys");
-                                                    Finish(nil);
-                                                });
-                                            }];
-                                        });
+                                        [guest presentViewController:[UIViewController new] animated:NO completion:^{
+                                            After(0.5, ^{
+                                                Check(!ECKHandle(guest,Press(44,YES,0)), @"guest system modal still blocks editor keys");
+                                                Finish(nil);
+                                            });
+                                        }];
                                     });
                                 });
                             }];
@@ -215,4 +219,3 @@ static void TestPrimaryPointer(UIView *view, dispatch_block_t done) {
 int main(int argc, char **argv) {
     @autoreleasepool { return UIApplicationMain(argc,argv,nil,NSStringFromClass(TestDelegate.class)); }
 }
-
