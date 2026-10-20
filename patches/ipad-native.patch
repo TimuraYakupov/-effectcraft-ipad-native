@@ -2036,7 +2036,7 @@ index 00000000..af0b327e
 +}
 diff --git a/apps/effectcraft-ios/src/media_drag_tests.rs b/apps/effectcraft-ios/src/media_drag_tests.rs
 new file mode 100644
-index 00000000..cbbf687d
+index 00000000..5aa5ad1c
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/media_drag_tests.rs
 @@ -0,0 +1,106 @@
@@ -2082,18 +2082,18 @@ index 00000000..cbbf687d
 +                Some(false) => if matches!(input, InputPath::NativeTouchCancel) { egui::TouchPhase::Cancel } else { egui::TouchPhase::End },
 +                None => egui::TouchPhase::Move,
 +            };
-+            h.event(egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: p, force: None });
++            h.input_mut().events.push(egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: p, force: None });
 +            match down {
 +                Some(false) => {
 +                    if !matches!(input, InputPath::NativeTouchCancel) {
-+                        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
++                        h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
 +                    }
-+                    h.event(egui::Event::PointerGone);
++                    h.input_mut().events.push(egui::Event::PointerGone);
 +                }
 +                _ => {
-+                    h.event(egui::Event::PointerMoved(p));
++                    h.input_mut().events.push(egui::Event::PointerMoved(p));
 +                    if down == Some(true) {
-+                        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
++                        h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
 +                    }
 +                }
 +            }
@@ -2104,10 +2104,10 @@ index 00000000..cbbf687d
 +        if let Some(down) = down { record["down"] = json!(down); }
 +        let mut events = vec![];
 +        keyboard.record(&record, false, false, &mut events).unwrap();
-+        for event in events { h.event(event); }
++        for event in events { h.input_mut().events.push(event); }
 +        h.step();
 +    };
-+    harness.event(egui::Event::PointerMoved(from));
++    harness.input_mut().events.push(egui::Event::PointerMoved(from));
 +    harness.step();
 +    send(&mut harness, &mut keyboard, from, Some(true));
 +    for step in 1..=12 { send(&mut harness, &mut keyboard, from + (to - from) * (step as f32 / 12.0), None); }
