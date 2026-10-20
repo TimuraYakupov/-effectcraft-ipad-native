@@ -1986,10 +1986,10 @@ index 00000000..011cb09e
 +}
 diff --git a/apps/effectcraft-ios/src/native_documents.rs b/apps/effectcraft-ios/src/native_documents.rs
 new file mode 100644
-index 00000000..0c14d6c6
+index 00000000..468dd97c
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/native_documents.rs
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,219 @@
 +//! Safe Rust side of the wrapper's UIKit folder picker and coordinated file access.
 +use effectcraft_engine::Services;
 +use serde_json::{Value, json};
@@ -2179,6 +2179,20 @@ index 00000000..0c14d6c6
 +        b.grant(PathBuf::from("/docs/one"));
 +        assert!(b.granted(Path::new("/docs/one/a.ecproj")));
 +        assert!(!b.granted(Path::new("/docs/one-more/a.ecproj")));
++    }
++    #[test]
++    fn restored_grants_require_current_process_and_whole_path_components() {
++        let dir = std::env::temp_dir().join(format!("ec-restored-grants-{}", std::process::id()));
++        std::fs::create_dir_all(&dir).unwrap();
++        let b = NativeDocuments { directory: dir.clone(), grants: Arc::default() };
++        let ready = dir.join("ready.json");
++        std::fs::write(&ready, serde_json::to_vec(&json!({"pid":std::process::id(),"version":1,"grants":["/external/project","/unsafe/../folder","relative"]})).unwrap()).unwrap();
++        assert!(b.granted(Path::new("/external/project/test.ecproj")));
++        assert!(!b.granted(Path::new("/external/project-other/test.ecproj")));
++        assert!(!b.granted(Path::new("/unsafe/../folder/test.ecproj")));
++        std::fs::write(&ready, br#"{"pid":0,"version":1,"grants":["/external/project"]}"#).unwrap();
++        assert!(!b.granted(Path::new("/external/project/test.ecproj")));
++        let _ = std::fs::remove_dir_all(dir);
 +    }
 +    #[test]
 +    fn response_errors_and_cancellation_are_not_successful_writes() {
@@ -2414,10 +2428,10 @@ index 00000000..03464fe5
 +}
 diff --git a/apps/effectcraft-ios/src/render_files.rs b/apps/effectcraft-ios/src/render_files.rs
 new file mode 100644
-index 00000000..ff15bb72
+index 00000000..e50c72a1
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/render_files.rs
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,116 @@
 +//! Deliver finished files without retaining video or sequence pixels in RAM.
 +use crate::native_documents::NativeDocuments;
 +use effectcraft_ui_egui::EffectcraftApp;
@@ -2511,6 +2525,28 @@ index 00000000..ff15bb72
 +        Ok((name, path))
 +    }).collect::<Result<Vec<_>, String>>()?;
 +    crate::store_zip::write(output, &entries)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn sequence_export_rejects_missing_frames_and_preserves_originals() {
++        let root = std::env::temp_dir().join(format!("ec-render-package-{}", std::process::id()));
++        std::fs::create_dir_all(&root).unwrap();
++        let a = root.join("frame0001.png");
++        let b = root.join("frame0002.png");
++        std::fs::write(&a, b"original frame one").unwrap();
++        let paths = vec![a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()];
++        assert!(package_sequence(&paths, &root.join("missing.zip")).is_err());
++        assert!(!root.join("missing.zip").exists());
++        std::fs::write(&b, b"original frame two").unwrap();
++        package_sequence(&paths, &root.join("complete.zip")).unwrap();
++        assert_eq!(std::fs::read(&a).unwrap(), b"original frame one");
++        assert_eq!(std::fs::read(&b).unwrap(), b"original frame two");
++        assert!(std::fs::metadata(root.join("complete.zip")).unwrap().len() > 32);
++        let _ = std::fs::remove_dir_all(root);
++    }
 +}
 diff --git a/apps/effectcraft-ios/src/settings.rs b/apps/effectcraft-ios/src/settings.rs
 new file mode 100644
@@ -5405,7 +5441,7 @@ index 8b5fd1c3..6c5d8bd7 100644
      fn every_ui_shortcut_parses() {
          for c in UI_COMMANDS {
 diff --git a/crates/ui-egui/src/panels/render_queue.rs b/crates/ui-egui/src/panels/render_queue.rs
-index e07efe69..9c993d9c 100644
+index e07efe69..a1fceb27 100644
 --- a/crates/ui-egui/src/panels/render_queue.rs
 +++ b/crates/ui-egui/src/panels/render_queue.rs
 @@ -788,6 +788,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
@@ -5427,7 +5463,7 @@ index e07efe69..9c993d9c 100644
      open.retain(|id| queue.iter().any(|i| i.id == *id));
      ui.data_mut(|d| d.insert_temp(state_id, (open, selected)));
      let ctx = ui.ctx().clone();
-@@ -801,6 +813,19 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -801,6 +813,22 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
      }
  }
  
@@ -5441,7 +5477,10 @@ index e07efe69..9c993d9c 100644
 +    if count == 0 || count > 4096 { return Err("Save image sequences of up to 4096 frames per ZIP".into()); }
 +    let path = app.session.resolve_output(item).ok_or("Output path missing")?;
 +    let first = item.settings.first_frame(comp);
-+    Ok((0..count).map(|i| effectcraft_engine::project::render_queue::sequence_path(&path, first + i as i64)).collect())
++    (0..count).map(|i| {
++        let frame = first.checked_add(i as i64).ok_or_else(|| "Sequence frame number overflow".to_string())?;
++        Ok(effectcraft_engine::project::render_queue::sequence_path(&path, frame))
++    }).collect()
 +}
 +
  #[cfg(test)]

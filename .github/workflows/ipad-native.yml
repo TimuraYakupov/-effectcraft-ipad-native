@@ -35,6 +35,9 @@ jobs:
         run: |
           cargo +1.95.0 test --locked -p effectcraft-ios --features eframe/x11
           cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --test ui_timeline_trim
+          cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip h264_mp4_roundtrip
+          cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip movies_carry_audio
+          cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip image_sequences_roundtrip
   uikit-keyboard:
     runs-on: macos-15
     timeout-minutes: 10
