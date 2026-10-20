@@ -207,3 +207,15 @@ It has no signing secrets and does not publish a GitHub release.
 
 The complete upstream CI suite has not been run; this is an experimental source
 bundle, not a production release or an upstream pull request.
+
+
+
+## Native Preview 12
+
+- Restores licensed original unicorn icon at iPad 76/152/167 pixel sizes.
+- Wires desktop CPAL output to native iOS audio session; interruptions stop playback.
+- Persists settings in stable Documents/Settings, first launch RAM preview 1 GiB.
+- Auto-save every minute by default; recovery copies stay in Documents/Recovery. Focus loss saves dirty work. Recovery prompt uses the engine crash sentinel.
+- Security-scoped external folder/save grants are bookmarked and restored before the document bridge becomes ready. Revoked provider access still requires choosing the folder again.
+- Render Queue defaults to Documents/Renders. Select a completed item and choose Save to Files. Movies/audio export as files; primary image sequences export as ZIP (up to 4096 frames / 512 MiB). Additional output modules remain in their specified output folders.
+- Physical iPad audio routes, background suspension, provider relaunch and playback require device validation; compilation does not establish those behaviors.

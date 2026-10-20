@@ -34,6 +34,53 @@ static NSURL *ECProjectCopies(void) {
     return [NSURL fileURLWithPath:[path stringByAppendingPathComponent:@"Opened Projects"] isDirectory:YES];
 }
 
+static NSURL *ECBookmarks(void) {
+    return [[[ECProjectCopies() URLByDeletingLastPathComponent] URLByAppendingPathComponent:@"Settings" isDirectory:YES] URLByAppendingPathComponent:@"ExternalBookmarks.plist"];
+}
+static void ECSaveBookmarks(void) {
+    NSMutableArray *records = [NSMutableArray new];
+    @synchronized(ECBridge) {
+        for (NSDictionary *grant in ECBridge.grants) {
+            NSURL *url = grant[@"url"];
+            NSString *local = ECProjectCopies().URLByDeletingLastPathComponent.path;
+            if ([url.path hasPrefix:[local stringByAppendingString:@"/"]]) continue;
+            NSError *error = nil;
+            NSData *bookmark = [url bookmarkDataWithOptions:NSURLBookmarkCreationMinimalBookmark includingResourceValuesForKeys:nil relativeToURL:nil error:&error];
+            NSString *path = grant[@"alias"] ?: url.path;
+            if (bookmark.length && bookmark.length <= 16384 && path.length <= 4096) [records addObject:@{@"path":path,@"bookmark":bookmark}];
+            else NSLog(@"EffectCraft: cannot persist access for %@: %@", url.lastPathComponent, error.localizedDescription);
+        }
+    }
+    NSURL *file = ECBookmarks();
+    [NSFileManager.defaultManager createDirectoryAtURL:file.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+    NSData *data = [NSPropertyListSerialization dataWithPropertyList:records format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil];
+    if (data.length <= (5U << 20)) [data writeToURL:file options:NSDataWritingAtomic error:nil];
+}
+static void ECRestoreBookmarks(void) {
+    NSURL *file = ECBookmarks();
+    NSNumber *length = nil; [file getResourceValue:&length forKey:NSURLFileSizeKey error:nil];
+    if (!length || length.unsignedLongLongValue > (5U << 20)) return;
+    NSData *data = [NSData dataWithContentsOfURL:file];
+    id records = data ? [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil] : nil;
+    if (![records isKindOfClass:NSArray.class] || [records count] > 256) return;
+    for (id record in records) {
+        if (![record isKindOfClass:NSDictionary.class]) continue;
+        NSString *path = record[@"path"]; NSData *bookmark = record[@"bookmark"];
+        if (![path isKindOfClass:NSString.class] || !path.isAbsolutePath || path.length > 4096 || ![bookmark isKindOfClass:NSData.class] || bookmark.length > 16384) continue;
+        BOOL stale = NO;
+        NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark options:NSURLBookmarkResolutionWithoutUI relativeToURL:nil bookmarkDataIsStale:&stale error:nil];
+        if (!url.isFileURL) continue;
+        BOOL scoped = [url startAccessingSecurityScopedResource];
+        ECFolderPresenter *presenter = [ECFolderPresenter new];
+        presenter.presentedItemURL = url;
+        presenter.presentedItemOperationQueue = [NSOperationQueue new];
+        presenter.presentedItemOperationQueue.maxConcurrentOperationCount = 1;
+        [NSFileCoordinator addFilePresenter:presenter];
+        @synchronized(ECBridge) { [ECBridge.grants addObject:@{@"url":url,@"alias":path,@"scoped":@(scoped),@"presenter":presenter}]; }
+    }
+    ECSaveBookmarks();
+}
+
 static NSURL *ECRoot(void) {
     const char *home = getenv("HOME");
     if (!home) return nil;
@@ -55,7 +102,9 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
         for (NSDictionary *grant in ECBridge.grants) {
             NSURL *url = grant[@"url"];
             NSString *base = url.URLByResolvingSymlinksInPath.path;
-            if ([candidate isEqualToString:base] || [candidate hasPrefix:[base stringByAppendingString:@"/"]]) return grant[@"presenter"];
+            NSString *alias = grant[@"alias"];
+            if ([candidate isEqualToString:base] || [candidate hasPrefix:[base stringByAppendingString:@"/"]] ||
+                (alias && ([path isEqual:alias] || [path hasPrefix:[alias stringByAppendingString:@"/"]]))) return grant[@"presenter"];
         }
     }
     return nil;
@@ -126,7 +175,7 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
             NSNumber *directory = nil;
             [url getResourceValue:&directory forKey:NSURLIsDirectoryKey error:&error];
             BOOL folderRequest = [request[@"action"] isEqual:@"folder"];
-            if (error || !directory || directory.boolValue != folderRequest) {
+            if (error || !directory || (![request[@"action"] isEqual:@"export"] && directory.boolValue != folderRequest)) {
                 if (scoped) [url stopAccessingSecurityScopedResource];
                 error = error ?: [NSError errorWithDomain:@"EffectCraft" code:5 userInfo:@{NSLocalizedDescriptionKey:folderRequest ? @"Select a folder" : @"Select a file, not a folder"}]; break;
             }
@@ -161,6 +210,7 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
                 [paths addObject:url.path];
             }
         }
+        ECSaveBookmarks();
         if (error && importFolder) [NSFileManager.defaultManager removeItemAtURL:importFolder error:nil];
         NSDictionary *response = error ? @{@"error":error.localizedDescription} : @{@"paths":paths};
         dispatch_async(dispatch_get_main_queue(), ^{ [self complete:response]; });
@@ -216,6 +266,14 @@ static void ECIO(NSURL *root, NSString *name, NSDictionary *request) {
     ECFolderPresenter *presenter = ECPresenter(path);
     if (!presenter) { ECReply(root,name,@{@"error":@"Select this folder again in Files to grant access"}); return; }
     NSURL *url = [NSURL fileURLWithPath:path];
+    @synchronized(ECBridge) { for (NSDictionary *grant in ECBridge.grants) {
+        NSString *alias = grant[@"alias"];
+        if (grant[@"presenter"] == presenter && alias && ([path isEqual:alias] || [path hasPrefix:[alias stringByAppendingString:@"/"]])) {
+            NSString *suffix = [path substringFromIndex:alias.length];
+            url = suffix.length ? [grant[@"url"] URLByAppendingPathComponent:[suffix substringFromIndex:1]] : grant[@"url"];
+            break;
+        }
+    } }
     NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:presenter];
     NSError *coordinationError = nil;
     __block NSError *operationError = nil;
@@ -249,7 +307,12 @@ static void ECTick(void) {
         NSURL *root = ECRoot(); if (!root) return;
         NSFileManager *fm = NSFileManager.defaultManager;
         if (![fm createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil]) return;
-        NSData *ready = [NSJSONSerialization dataWithJSONObject:@{@"pid":@(getpid()),@"version":@1} options:0 error:nil];
+        NSMutableArray *grants = [NSMutableArray new];
+        @synchronized(ECBridge) { for (NSDictionary *grant in ECBridge.grants) {
+            NSString *path = grant[@"alias"] ?: [grant[@"url"] path];
+            if (path.length <= 4096) [grants addObject:path];
+        } }
+        NSData *ready = [NSJSONSerialization dataWithJSONObject:@{@"pid":@(getpid()),@"version":@1,@"grants":grants} options:0 error:nil];
         [ready writeToURL:ECFile(root,@"ready.json") options:NSDataWritingAtomic error:nil];
         @synchronized(ECBridge) {
             if (ECBridge.pending && [fm fileExistsAtPath:ECFile(root,[ECBridge.pending stringByAppendingString:@".cancel"]).path]) {
@@ -282,6 +345,7 @@ __attribute__((constructor,used)) static void ECInstallDocuments(void) {
         ECTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,ECQueue);
         dispatch_source_set_timer(ECTimer,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),NSEC_PER_SEC/5,NSEC_PER_SEC/20);
         dispatch_source_set_event_handler(ECTimer, ^{ ECTick(); });
+        dispatch_async(ECQueue, ^{ ECRestoreBookmarks(); });
         dispatch_resume(ECTimer);
         [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillTerminateNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
             dispatch_source_cancel(ECTimer);
@@ -292,3 +356,4 @@ __attribute__((constructor,used)) static void ECInstallDocuments(void) {
         }];
     }
 }
+

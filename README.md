@@ -15,7 +15,7 @@ flow. Packages use the stored ZIP format supported by the existing AE Bridge.
 Fonts (TTF/OTF/TTC/OTC) are validated, saved in EffectCraft Documents/Fonts and
 restored on launch; Character and rendered-frame caches refresh after import.
 
-Output: `EffectCraft-Native-Preview-11.ipa`, build 11. RAM remains 1 GiB.
+Output: `EffectCraft-Native-Preview-12.ipa`, build 11. RAM remains 1 GiB.
 Simulator and automated tests do not replace physical mouse/trackpad testing
 inside LiveContainer.
 
@@ -242,3 +242,7 @@ Build success must not be inferred from the presence of this source package.
 
 EffectCraft and this code: MIT OR Apache-2.0. The workflow fetches the upstream
 licenses and attributed assets together with the source.
+
+
+
+Preview 12 restores the original app icon and adds native audio output, persisted preferences, auto-save/recovery, restored external folder permissions, and Render Queue delivery to Files. Render locally to Renders, select a completed item in Render Queue, then use **Save to Files…**. Image sequences use a bounded ZIP export. See VALIDATION.md for device checks and limits.

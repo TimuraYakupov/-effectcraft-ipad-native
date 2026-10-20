@@ -18,6 +18,10 @@ class PackagingTests(unittest.TestCase):
         self.binary = self.root / "effectcraft/target/aarch64-apple-ios/release/effectcraft-ios"
         self.binary.parent.mkdir(parents=True)
         self.binary.write_bytes(struct.pack("<8I", 0xFEEDFACF, 0x0100000C, 0, 2, 0, 0, 0, 0))
+        icon = self.root / "effectcraft/assets/app-icon"
+        icon.mkdir(parents=True)
+        for name in ["LICENSE.txt", "effectcraft-1024.png.attribution", "effectcraft-1024.png"]:
+            (icon / name).write_bytes(b"test icon")
         for name in ("LICENSE-MIT", "LICENSE-APACHE", "ATTRIBUTION.md"):
             (self.root / "effectcraft" / name).write_text("synthetic test fixture")
 
@@ -31,16 +35,19 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "iOS device"):
             package(self.root)
 
+    @patch("package_ipa.subprocess.run", side_effect=lambda args, **kwargs: Path(args[-1]).write_bytes(b"resized icon"))
     @patch("package_ipa.subprocess.check_output", return_value="platform IOS\nminos 16.0\n")
-    def test_package_layout_and_separate_identity(self, _vtool):
+    def test_package_layout_and_separate_identity(self, _vtool, _sips):
         ipa = package(self.root)
         with zipfile.ZipFile(ipa) as archive:
             self.assertIsNone(archive.testzip())
             prefix = "Payload/EffectCraftNative.app/"
             info = plistlib.loads(archive.read(prefix + "Info.plist"))
             self.assertEqual(info["CFBundleIdentifier"], "com.effectcraft.ipad.nativepreview")
-            self.assertEqual(info["CFBundleVersion"], "11")
+            self.assertEqual(info["CFBundleVersion"], "12")
             self.assertEqual(info["UIDeviceFamily"], [2])
+            self.assertIn("CFBundleIcons~ipad", info)
+            self.assertEqual(archive.read(prefix + "AppIcon83.5x83.5@2x.png"), b"resized icon")
             self.assertTrue(info["UIStatusBarHidden"])
             declarations = {entry["UTTypeIdentifier"]: entry for entry in info["UTExportedTypeDeclarations"]}
             for name, extension in [("com.effectcraft.project", "ecproj"), ("com.effectcraft.project.xml", "ecprojx")]:
@@ -54,3 +61,4 @@ class PackagingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

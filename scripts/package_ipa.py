@@ -6,6 +6,7 @@ import plistlib
 import struct
 import subprocess
 import zipfile
+import tempfile
 
 
 def package(root: Path) -> Path:
@@ -20,14 +21,16 @@ def package(root: Path) -> Path:
     if platforms != [["IOS"]]:
         raise ValueError("Binary is not built for an iOS device")
     plist = {
-        "CFBundleDisplayName": "EC Native Preview 11",
+        "CFBundleDisplayName": "EC Native Preview 12",
         "CFBundleName": "EffectCraft Native Preview",
         "CFBundleIdentifier": "com.effectcraft.ipad.nativepreview",
         "CFBundleExecutable": "EffectCraftNative",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "0.10.0",
-        "CFBundleVersion": "11",
+        "CFBundleVersion": "12",
         "MinimumOSVersion": "16.0",
+        "CFBundleIconFiles": ["AppIcon76x76", "AppIcon83.5x83.5"],
+        "CFBundleIcons~ipad": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon76x76", "AppIcon83.5x83.5"]}},
         "UIDeviceFamily": [2],
         "CFBundleSupportedPlatforms": ["iPhoneOS"],
         "LSRequiresIPhoneOS": True,
@@ -58,7 +61,7 @@ def package(root: Path) -> Path:
     }
     out = root / "output"
     out.mkdir(exist_ok=True)
-    ipa = out / "EffectCraft-Native-Preview-11.ipa"
+    ipa = out / "EffectCraft-Native-Preview-12.ipa"
     prefix = "Payload/EffectCraftNative.app/"
     with zipfile.ZipFile(ipa, "w", zipfile.ZIP_DEFLATED) as archive:
         executable = zipfile.ZipInfo(prefix + "EffectCraftNative")
@@ -67,6 +70,14 @@ def package(root: Path) -> Path:
         executable.compress_type = zipfile.ZIP_DEFLATED
         archive.writestr(executable, payload)
         archive.writestr(prefix + "Info.plist", plistlib.dumps(plist))
+        source_icon = root / "effectcraft/assets/app-icon/effectcraft-1024.png"
+        with tempfile.TemporaryDirectory() as temp:
+            for name, size in [("AppIcon76x76.png", 76), ("AppIcon76x76@2x.png", 152), ("AppIcon83.5x83.5@2x.png", 167)]:
+                icon = Path(temp) / name
+                subprocess.run(["sips", "-z", str(size), str(size), str(source_icon), "--out", str(icon)], check=True, capture_output=True)
+                archive.write(icon, prefix + name)
+        for name in ["LICENSE.txt", "effectcraft-1024.png.attribution"]:
+            archive.write(source_icon.parent / name, prefix + "Licenses/app-icon/" + name)
         for name in ("LICENSE-MIT", "LICENSE-APACHE", "ATTRIBUTION.md"):
             source = root / "effectcraft" / name
             if not source.is_file():
@@ -87,3 +98,4 @@ def package(root: Path) -> Path:
 
 if __name__ == "__main__":
     print(package(Path(__file__).resolve().parent.parent))
+

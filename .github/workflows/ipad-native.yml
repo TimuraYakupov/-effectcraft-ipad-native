@@ -81,9 +81,10 @@ jobs:
         run: |
           xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -fobjc-arc -fmodules -Wall -Wextra -c platform/EffectCraftDocuments.m -o /tmp/effectcraft-documents.o
           xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -fobjc-arc -fmodules -Wall -Wextra -c platform/EffectCraftKeyboard.m -o /tmp/effectcraft-keyboard.o
+          xcrun --sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -fobjc-arc -fmodules -Wall -Wextra -c platform/EffectCraftAudio.m -o /tmp/effectcraft-audio.o
       - name: Compile native ARM64 app
         working-directory: effectcraft
-        run: cargo +1.95.0 rustc --locked --release --target aarch64-apple-ios -p effectcraft-ios -- -C link-arg=/tmp/effectcraft-documents.o -C link-arg=/tmp/effectcraft-keyboard.o -C link-arg=-framework -C link-arg=UIKit -C link-arg=-framework -C link-arg=Foundation -C link-arg=-framework -C link-arg=UniformTypeIdentifiers
+        run: cargo +1.95.0 rustc --locked --release --target aarch64-apple-ios -p effectcraft-ios -- -C link-arg=/tmp/effectcraft-documents.o -C link-arg=/tmp/effectcraft-keyboard.o -C link-arg=/tmp/effectcraft-audio.o -C link-arg=-framework -C link-arg=AVFoundation -C link-arg=-framework -C link-arg=UIKit -C link-arg=-framework -C link-arg=Foundation -C link-arg=-framework -C link-arg=UniformTypeIdentifiers
       - name: Package unsigned IPA
         run: python3 scripts/package_ipa.py
       - name: Upload IPA and build details
@@ -93,3 +94,4 @@ jobs:
           path: output/
           if-no-files-found: error
           retention-days: 14
+

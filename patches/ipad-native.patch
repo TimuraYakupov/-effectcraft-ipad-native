@@ -1,8 +1,8 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index ce8fe123..a889d7cb 100644
+index ce8fe123..049aa3fc 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -1387,6 +1387,20 @@ dependencies = [
+@@ -1387,6 +1387,21 @@ dependencies = [
   "thiserror 2.0.21",
  ]
  
@@ -10,6 +10,7 @@ index ce8fe123..a889d7cb 100644
 +name = "effectcraft-ios"
 +version = "0.10.0"
 +dependencies = [
++ "cpal",
 + "effectcraft-engine",
 + "effectcraft-host",
 + "effectcraft-ui-egui",
@@ -23,7 +24,7 @@ index ce8fe123..a889d7cb 100644
  [[package]]
  name = "effectcraft-keyframe"
  version = "0.10.0"
-@@ -1667,6 +1681,7 @@ dependencies = [
+@@ -1667,6 +1682,7 @@ dependencies = [
   "effectcraft-gpu",
   "effectcraft-host",
   "effectcraft-media",
@@ -33,10 +34,10 @@ index ce8fe123..a889d7cb 100644
   "egui",
 diff --git a/apps/effectcraft-ios/Cargo.toml b/apps/effectcraft-ios/Cargo.toml
 new file mode 100644
-index 00000000..4ff96ccc
+index 00000000..81598ef0
 --- /dev/null
 +++ b/apps/effectcraft-ios/Cargo.toml
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,25 @@
 +[package]
 +name = "effectcraft-ios"
 +description = "Experimental native iPad frontend"
@@ -56,6 +57,9 @@ index 00000000..4ff96ccc
 +serde_json.workspace = true
 +log.workspace = true
 +winit = { version = "0.30", default-features = false }
++
++[target.'cfg(target_os = "ios")'.dependencies]
++cpal.workspace = true
 +
 +[dev-dependencies]
 +egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
@@ -380,10 +384,10 @@ index 00000000..5728466c
 +}
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..0a36a1bc
+index 00000000..5688229e
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,217 @@
 +//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
 +use std::path::PathBuf;
 +
@@ -401,6 +405,8 @@ index 00000000..0a36a1bc
 +    pub previous: bool,
 +    pub text: String,
 +    pub last_playing: bool,
++    pub lifecycle: crate::lifecycle::Lifecycle,
++    pub renders: crate::render_files::RenderFiles,
 +}
 +
 +impl DiagnosticApp {
@@ -409,6 +415,7 @@ index 00000000..0a36a1bc
 +        self.app.session.prefs.disk.disk_cache_enabled = enabled;
 +        self.app.session.prefs.disk.disk_cache_max_gb = gib.clamp(1, 4);
 +        self.app.session.prefs_changed();
++        self.app.session.save_prefs();
 +        if enabled && self.app.session.disk_cache.is_none() {
 +            self.app.ui.status = "Disk cache could not open. Preview is using RAM; details are in the log.".into();
 +        }
@@ -420,6 +427,7 @@ index 00000000..0a36a1bc
 +        self.app.stop();
 +        self.app.session.prefs.memory.preview_cache_mb = mib;
 +        self.app.session.prefs_changed();
++        self.app.session.save_prefs();
 +        self.app.frames.set_budget((mib as usize) << 20);
 +        log::info!(target: "effectcraft_diagnostics", "preview_cache_limit_mib={mib}");
 +    }
@@ -440,7 +448,8 @@ index 00000000..0a36a1bc
 +    }
 +
 +    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
-+        if let Err(error) = self.keyboard.input(ctx, input, self.files.is_open() || self.bridge.is_open() || self.open) {
++        self.lifecycle.input(&mut self.app, input.focused);
++        if let Err(error) = self.keyboard.input(ctx, input, self.files.is_open() || self.bridge.is_open() || self.renders.is_open() || self.open) {
 +            self.app.ui.status = error;
 +        }
 +        self.app.raw_input_hook(ctx, input);
@@ -453,7 +462,7 @@ index 00000000..0a36a1bc
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 11").clicked() {
++                if ui.button("Diagnostics · build 12").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
@@ -461,7 +470,7 @@ index 00000000..0a36a1bc
 +        if self.open {
 +            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 11").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 12").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
 +                ui.label(&self.keyboard.native_status);
 +                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
@@ -533,6 +542,7 @@ index 00000000..0a36a1bc
 +                if ui.checkbox(&mut idle, "Cache frames while idle").changed() {
 +                    self.app.session.prefs.previews.cache_frames_when_idle = idle;
 +                    self.app.session.prefs_changed();
++        self.app.session.save_prefs();
 +                    log::info!(target: "effectcraft_diagnostics", "idle_cache={idle}");
 +                }
 +                ui.horizontal(|ui| {
@@ -578,17 +588,20 @@ index 00000000..0a36a1bc
 +            });
 +            self.open = open;
 +        }
++        self.renders.show(&mut self.app, ctx);
 +        self.files.show(&mut self.app, ctx);
 +        self.bridge.show(&mut self.app, ctx);
 +        // Diagnostics keeps native capture active for its live key counter; the
 +        // input hook suppresses project commands while that window is open.
-+        if let Err(error) = self.keyboard.output(ctx, self.files.is_open() || self.bridge.is_open()) {
++        if let Err(error) = self.keyboard.output(ctx, self.files.is_open() || self.bridge.is_open() || self.renders.is_open()) {
 +            self.app.ui.status = error;
 +        }
 +    }
 +
 +    fn on_exit(&mut self) {
 +        log::info!(target: "effectcraft_diagnostics", "clean_exit");
++        self.app.session.save_prefs();
++        let _ = self.app.session.autosave_wait();
 +        self.app.on_exit();
 +    }
 +}
@@ -1822,18 +1835,53 @@ index 00000000..6b505fde
 +        assert!(bridge.record(&json!({"kind":"paste","code":25,"down":true,"text":"x".repeat(MAX_CLIPBOARD+1)}), true, false, &mut events).is_err());
 +    }
 +}
+diff --git a/apps/effectcraft-ios/src/lifecycle.rs b/apps/effectcraft-ios/src/lifecycle.rs
+new file mode 100644
+index 00000000..9441c9b2
+--- /dev/null
++++ b/apps/effectcraft-ios/src/lifecycle.rs
+@@ -0,0 +1,23 @@
++//! Capture edits when focus is lost, including the UIKit suspension notification.
++#[derive(Default)]
++pub struct Lifecycle {
++    inactive: bool,
++}
++impl Lifecycle {
++    pub fn input(&mut self, app: &mut effectcraft_ui_egui::EffectcraftApp, focused: bool) {
++        let marker = crate::native_documents::NativeDocuments::lifecycle_path();
++        let inactive = !focused || std::fs::read_to_string(marker).is_ok_and(|v| v == format!("{}:inactive", std::process::id()));
++        if inactive && !self.inactive {
++            app.stop();
++            app.session.save_prefs();
++            if app.session.is_dirty() {
++                if let Err(error) = app.session.autosave_now().and_then(|_| app.session.autosave_wait()) {
++                    log::error!("Background recovery save: {error}");
++                    app.ui.status = format!("Recovery save failed: {error}");
++                }
++            }
++            app.session.update_sentinel();
++        }
++        self.inactive = inactive;
++    }
++}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..2618f0aa
+index 00000000..011cb09e
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,114 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
 +//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 +
 +use effectcraft_ui_egui::EffectcraftApp;
 +use serde_json::json;
++#[cfg(target_os = "ios")]
++#[path = "../../effectcraft/src/audio_out.rs"]
++mod audio_out;
++mod settings;
++mod lifecycle;
++mod render_files;
 +mod bridge;
 +mod diagnostics;
 +mod files;
@@ -1850,7 +1898,7 @@ index 00000000..2618f0aa
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=11 startup workers=1 preview_mib=1024 disk_gib=1 hardware_keyboard=responder_chain");
++    log::info!(target: "effectcraft_diagnostics", "build=12 startup workers=1 preview_mib=1024 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1885,21 +1933,21 @@ index 00000000..2618f0aa
 +                log::warn!("User font restore: {error}");
 +            }
 +            let mut session = effectcraft_host::session();
-+            session.prefs.memory.layer_cache_mb = 64;
-+            session.prefs.memory.media_cache_mb = 64;
-+            session.prefs.memory.preview_cache_mb = 1024;
-+            session.prefs.previews.cache_frames_when_idle = true;
-+            session.prefs.disk.disk_cache_enabled = true;
-+            session.prefs.disk.disk_cache_max_gb = 1;
-+            session.prefs.disk.disk_cache_folder = effectcraft_engine::render::disk_cache::default_folder().to_string_lossy().into_owned();
-+            session.prefs_changed();
++            settings::configure(&mut session, &bridge::documents());
++            let recovery = session.begin_recovery();
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 11: hardware input, pointer hover, AE Bridge and custom fonts. RAM: 1 GiB.".to_string(),
++                Ok(_) => "Build 12: audio, persistent settings, recovery and render delivery. RAM: 1 GiB.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
++            if let Some(recovery) = recovery { app.offer_recovery(recovery); }
++            #[cfg(target_os = "ios")]
++            {
++                app.hooks.audio_device = Some(Box::new(audio_out::open));
++                app.hooks.audio_devices = Some(Box::new(audio_out::devices));
++            }
 +            app.ui.start_screen = false;
 +            app.ui.status = status;
 +            let failures = effectcraft_ui_egui::gpu_failure::GpuFailureBridge::new(&cc.egui_ctx);
@@ -1918,6 +1966,7 @@ index 00000000..2618f0aa
 +            app.set_gpu_failure_bridge(failures);
 +            let files = files::Files::install(&mut app, &cc.egui_ctx);
 +            let bridge = bridge::Bridge::install(&mut app, &cc.egui_ctx, files.native_documents());
++            let renders = render_files::RenderFiles::install(&mut app, &cc.egui_ctx, files.native_documents());
 +            Ok(Box::new(diagnostics::DiagnosticApp {
 +                app,
 +                files,
@@ -1929,16 +1978,18 @@ index 00000000..2618f0aa
 +                previous: false,
 +                text: String::new(),
 +                last_playing: false,
++                lifecycle: lifecycle::Lifecycle::default(),
++                renders,
 +            }))
 +        }),
 +    )
 +}
 diff --git a/apps/effectcraft-ios/src/native_documents.rs b/apps/effectcraft-ios/src/native_documents.rs
 new file mode 100644
-index 00000000..50ce5610
+index 00000000..0c14d6c6
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/native_documents.rs
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,205 @@
 +//! Safe Rust side of the wrapper's UIKit folder picker and coordinated file access.
 +use effectcraft_engine::Services;
 +use serde_json::{Value, json};
@@ -1971,6 +2022,7 @@ index 00000000..50ce5610
 +        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
 +        Self { directory: home.join("Library/Caches/EffectCraft/DocumentBridge8"), grants: Arc::default() }
 +    }
++    pub fn lifecycle_path() -> PathBuf { Self::new().directory.join("lifecycle.txt") }
 +    pub fn available(&self) -> bool {
 +        if !cfg!(target_os = "ios") {
 +            return false;
@@ -1980,7 +2032,18 @@ index 00000000..50ce5610
 +        value["pid"].as_u64() == Some(std::process::id() as u64) && value["version"].as_u64() == Some(1)
 +    }
 +    pub fn granted(&self, path: &Path) -> bool {
-+        self.grants.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|root| path.starts_with(root))
++        if self.grants.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|root| path.starts_with(root)) { return true; }
++        self.restored_grants().iter().any(|root| path.starts_with(root))
++    }
++    fn restored_grants(&self) -> Vec<PathBuf> {
++        use std::io::Read;
++        let Ok(file) = std::fs::File::open(self.directory.join("ready.json")) else { return vec![] };
++        let mut data = Vec::new();
++        if file.take((2 << 20) + 1).read_to_end(&mut data).is_err() || data.len() > 2 << 20 { return vec![]; }
++        let Ok(value) = serde_json::from_slice::<Value>(&data) else { return vec![] };
++        if value["pid"].as_u64() != Some(std::process::id() as u64) || value["version"].as_u64() != Some(1) { return vec![]; }
++        value["grants"].as_array().into_iter().flatten().take(256).filter_map(Value::as_str)
++            .filter(|v| v.len() <= 16384).map(PathBuf::from).filter(|p| p.is_absolute() && !p.components().any(|c| matches!(c, std::path::Component::ParentDir))).collect()
 +    }
 +    pub fn grant(&self, path: PathBuf) {
 +        let mut grants = self.grants.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -2347,6 +2410,164 @@ index 00000000..03464fe5
 +            assert!(relative_name(bad).is_err(), "{bad}");
 +        }
 +        assert_eq!(relative_name("media/a.png").unwrap(), PathBuf::from("media/a.png"));
++    }
++}
+diff --git a/apps/effectcraft-ios/src/render_files.rs b/apps/effectcraft-ios/src/render_files.rs
+new file mode 100644
+index 00000000..ff15bb72
+--- /dev/null
++++ b/apps/effectcraft-ios/src/render_files.rs
+@@ -0,0 +1,94 @@
++//! Deliver finished files without retaining video or sequence pixels in RAM.
++use crate::native_documents::NativeDocuments;
++use effectcraft_ui_egui::EffectcraftApp;
++use eframe::egui;
++use std::{path::PathBuf, sync::mpsc::{self, Receiver}};
++
++pub struct RenderFiles {
++    requests: Receiver<Vec<String>>,
++    work: Option<Receiver<Result<PathBuf, String>>>,
++    pending: Option<String>,
++    temporary: Option<PathBuf>,
++    native: NativeDocuments,
++}
++impl RenderFiles {
++    pub fn install(app: &mut EffectcraftApp, ctx: &egui::Context, native: NativeDocuments) -> Self {
++        let (send, requests) = mpsc::sync_channel(1);
++        let wake = ctx.clone();
++        app.hooks.save_rendered = Some(Box::new(move |paths| {
++            if paths.is_empty() || paths.len() > 4096 { return Err("Invalid render output count".into()); }
++            send.try_send(paths).map_err(|_| "A render export is already waiting".to_string())?;
++            wake.request_repaint();
++            Ok(())
++        }));
++        Self { requests, work: None, pending: None, temporary: None, native }
++    }
++    pub fn is_open(&self) -> bool { self.pending.is_some() || self.work.is_some() }
++    pub fn show(&mut self, app: &mut EffectcraftApp, ctx: &egui::Context) {
++        if !self.is_open() {
++            if let Ok(paths) = self.requests.try_recv() {
++                app.stop();
++                if paths.len() == 1 {
++                    self.start(app, &PathBuf::from(&paths[0]));
++                } else {
++                    match self.native.staging("Rendered-Sequence.zip", "zip") {
++                        Err(error) => app.ui.status = error,
++                        Ok(output) => {
++                            let (send, receive) = mpsc::sync_channel(1);
++                            let wake = ctx.clone();
++                            let result = std::thread::Builder::new().name("ec-render-delivery".into()).spawn(move || {
++                                let result = package_sequence(&paths, &output).map(|_| output);
++                                let _ = send.send(result);
++                                wake.request_repaint();
++                            });
++                            match result {
++                                Ok(_) => { self.work = Some(receive); app.ui.status = "Packaging rendered sequence…".into(); }
++                                Err(error) => app.ui.status = error.to_string(),
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        if let Some(work) = &self.work {
++            match work.try_recv() {
++                Ok(result) => {
++                    self.work = None;
++                    match result {
++                        Ok(path) => { self.temporary = Some(path.clone()); self.start(app, &path); }
++                        Err(error) => app.ui.status = error,
++                    }
++                }
++                Err(mpsc::TryRecvError::Disconnected) => { self.work = None; app.ui.status = "Render delivery worker stopped".into(); }
++                Err(mpsc::TryRecvError::Empty) => {}
++            }
++        }
++        if let Some(id) = &self.pending {
++            if let Some(result) = self.native.poll(id) {
++                self.pending = None;
++                app.ui.status = match result {
++                    Ok(value) if value["cancelled"].as_bool() == Some(true) => "Save cancelled; rendered output is kept in Renders".into(),
++                    Ok(_) => "Rendered output saved to Files".into(),
++                    Err(error) => error,
++                };
++                if let Some(path) = self.temporary.take() { let _ = std::fs::remove_file(path); }
++            }
++        }
++        if self.is_open() { ctx.request_repaint_after(std::time::Duration::from_millis(100)); }
++    }
++    fn start(&mut self, app: &mut EffectcraftApp, path: &std::path::Path) {
++        match self.native.export_copy(path) {
++            Ok(id) => self.pending = Some(id),
++            Err(error) => app.ui.status = error,
++        }
++    }
++}
++fn package_sequence(paths: &[String], output: &std::path::Path) -> Result<(), String> {
++    let entries = paths.iter().map(|path| {
++        let path = PathBuf::from(path);
++        let name = path.file_name().and_then(|s| s.to_str()).ok_or("Invalid sequence filename")?.to_owned();
++        if !path.is_file() { return Err(format!("Rendered frame is missing: {name}")); }
++        Ok((name, path))
++    }).collect::<Result<Vec<_>, String>>()?;
++    crate::store_zip::write(output, &entries)
++}
+diff --git a/apps/effectcraft-ios/src/settings.rs b/apps/effectcraft-ios/src/settings.rs
+new file mode 100644
+index 00000000..c0c76b77
+--- /dev/null
++++ b/apps/effectcraft-ios/src/settings.rs
+@@ -0,0 +1,52 @@
++//! Stable settings and recovery storage, including LiveContainer upgrades.
++use std::{path::Path, sync::Arc};
++use effectcraft_engine::{Session, config::DirConfig};
++
++pub fn configure(session: &mut Session, documents: &Path) {
++    let settings = documents.join("Settings");
++    let first_launch = !settings.join(effectcraft_engine::prefs::PREFS_FILE).is_file();
++    session.config = Some(Arc::new(DirConfig::new(settings)));
++    session.load_settings();
++    if first_launch {
++        session.prefs.memory.layer_cache_mb = 64;
++        session.prefs.memory.media_cache_mb = 64;
++        session.prefs.memory.preview_cache_mb = 1024;
++        session.prefs.previews.cache_frames_when_idle = true;
++        session.prefs.disk.disk_cache_enabled = true;
++        session.prefs.disk.disk_cache_max_gb = 1;
++        session.prefs.auto_save.enabled = true;
++        session.prefs.auto_save.interval_minutes = 1;
++        session.prefs.export.default_output_folder = documents.join("Renders").to_string_lossy().into_owned();
++    }
++    // OS cache paths may change across installs; preferences belong in Documents.
++    session.prefs.disk.disk_cache_folder = effectcraft_engine::render::disk_cache::default_folder().to_string_lossy().into_owned();
++    session.autosave_folder_override = Some(documents.join("Recovery"));
++    session.autosave.background = true;
++    session.check_footage_on_open = true;
++    session.prefs_changed();
++    session.save_prefs();
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn relaunch_keeps_cache_and_autosave_choices() {
++        let root = std::env::temp_dir().join(format!("ec-settings-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        let mut first = Session::default();
++        configure(&mut first, &root);
++        assert_eq!(first.prefs.memory.preview_cache_mb, 1024);
++        first.prefs.memory.preview_cache_mb = 256;
++        first.prefs.disk.disk_cache_enabled = false;
++        first.prefs.auto_save.interval_minutes = 3;
++        first.save_prefs();
++        let mut next = Session::default();
++        configure(&mut next, &root);
++        assert_eq!(next.prefs.memory.preview_cache_mb, 256);
++        assert!(!next.prefs.disk.disk_cache_enabled);
++        assert_eq!(next.prefs.auto_save.interval_minutes, 3);
++        assert_eq!(next.autosave_folder_override, Some(root.join("Recovery")));
++        let _ = std::fs::remove_dir_all(root);
 +    }
 +}
 diff --git a/apps/effectcraft-ios/src/store_zip.rs b/apps/effectcraft-ios/src/store_zip.rs
@@ -4863,20 +5084,22 @@ index fb381cfd..9bd1cfb9 100644
      let (icon, mode) = match app.session.prefs.appearance.appearance_mode.as_str() {
          "auto" => (Icon::Monitor, tr("Sync with System")),
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 105a075e..9808c7f3 100644
+index 105a075e..54d3bf36 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
-@@ -144,6 +144,9 @@ pub struct Hooks {
+@@ -144,6 +144,11 @@ pub struct Hooks {
      /// The system appearance for Settings ▸ Appearance ▸ Sync with System (the desktop app reads
      /// the Linux desktop portal); without it, what egui reports.
      pub system_theme: Option<SystemThemeFn>,
 +    /// Optional ZIP bridge supplied by the browser/iPad host.
 +    pub bridge_state: Option<Box<dyn Fn() -> Option<crate::menus::BridgeState>>>,
 +    pub bridge_action: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
++    /// Save completed Render Queue output through the platform share/export picker.
++    pub save_rendered: Option<Box<dyn Fn(Vec<String>) -> Result<(), String>>>,
      pub pick_files: Option<Box<dyn Fn(&[&str]) -> Vec<String>>>,
      pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
      pub pick_open_project: Option<Box<dyn Fn() -> Option<String>>>,
-@@ -1192,6 +1195,7 @@ impl EffectcraftApp {
+@@ -1192,6 +1197,7 @@ impl EffectcraftApp {
          };
          let mut queued = self.frames.inflight();
          let series = self.frame_series(cid, scale);
@@ -4884,7 +5107,7 @@ index 105a075e..9808c7f3 100644
          // The preview's position orders prefetch and eviction (#595).
          let playhead = plan.filter(|p| p.video).map(|p| frames::Playhead { series, cur, start: p.start, end: p.end, step: p.step, looping: p.looping });
          self.frames.set_playhead(playhead);
-@@ -1204,7 +1208,17 @@ impl EffectcraftApp {
+@@ -1204,7 +1210,17 @@ impl EffectcraftApp {
              let mut all = true;
              let n = (p.end - p.start) / p.step + 1;
              let fit = self.frames_that_fit(&c, scale);
@@ -4903,7 +5126,7 @@ index 105a075e..9808c7f3 100644
                  let mut cut = p;
                  (cut.start, cut.end) = (p.first, (p.first + (fit - 1) * p.step).min(p.end));
                  self.playback.plan = Some(cut);
-@@ -1214,7 +1228,8 @@ impl EffectcraftApp {
+@@ -1214,7 +1230,8 @@ impl EffectcraftApp {
              }
              let order: Vec<i64> = (0..n).filter_map(|k| p.frame_after(p.first, k)).collect();
              for f in order {
@@ -4913,7 +5136,7 @@ index 105a075e..9808c7f3 100644
                      continue;
                  }
                  all = false;
-@@ -1407,14 +1422,17 @@ impl EffectcraftApp {
+@@ -1407,14 +1424,17 @@ impl EffectcraftApp {
              return;
          }
          let cur = comp.frame_rate.frame_at(self.session.time()).clamp(wa, wb);
@@ -5181,6 +5404,49 @@ index 8b5fd1c3..6c5d8bd7 100644
      #[test]
      fn every_ui_shortcut_parses() {
          for c in UI_COMMANDS {
+diff --git a/crates/ui-egui/src/panels/render_queue.rs b/crates/ui-egui/src/panels/render_queue.rs
+index e07efe69..9c993d9c 100644
+--- a/crates/ui-egui/src/panels/render_queue.rs
++++ b/crates/ui-egui/src/panels/render_queue.rs
+@@ -788,6 +788,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+         t.text_dim,
+     );
+ 
++    if let Some(save) = &app.hooks.save_rendered {
++        let ready = selected.and_then(|id| queue.iter().find(|it| it.id == id && it.status == RenderStatus::Done));
++        let button = Rect::from_min_size(pos2(foot.center().x - 75.0, foot.min.y + 1.0), vec2(150.0, FOOT_H - 2.0));
++        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(button));
++        if child.add_enabled(!rendering && ready.is_some(), egui::Button::new("Save to Files…")).clicked() {
++            if let Some(item) = ready {
++                let result = completed_paths(app, item).and_then(save.as_ref());
++                if let Err(error) = result { app.ui.status = error; }
++            }
++        }
++    }
++
+     open.retain(|id| queue.iter().any(|i| i.id == *id));
+     ui.data_mut(|d| d.insert_temp(state_id, (open, selected)));
+     let ctx = ui.ctx().clone();
+@@ -801,6 +813,19 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     }
+ }
+ 
++/// Exact frame paths for a finished primary output; never includes unrelated folder files.
++fn completed_paths(app: &EffectcraftApp, item: &RenderQueueItem) -> Result<Vec<String>, String> {
++    if !item.output.format.is_sequence() {
++        return item.last_output.clone().map(|path| vec![path]).ok_or_else(|| "Render this item first".into());
++    }
++    let comp = app.session.project.comp(item.comp).ok_or("Composition missing")?;
++    let count = item.settings.frame_count(comp);
++    if count == 0 || count > 4096 { return Err("Save image sequences of up to 4096 frames per ZIP".into()); }
++    let path = app.session.resolve_output(item).ok_or("Output path missing")?;
++    let first = item.settings.first_frame(comp);
++    Ok((0..count).map(|i| effectcraft_engine::project::render_queue::sequence_path(&path, first + i as i64)).collect())
++}
++
+ #[cfg(test)]
+ mod tests {
+     #[test]
 diff --git a/crates/ui-egui/src/panels/text_panels.rs b/crates/ui-egui/src/panels/text_panels.rs
 index ae2294f1..7436fbe0 100644
 --- a/crates/ui-egui/src/panels/text_panels.rs
