@@ -30,7 +30,7 @@ def main():
         app = Path(temporary) / "KeyboardSmoke.app"
         app.mkdir()
         plist = {"CFBundleIdentifier": "com.effectcraft.keyboard.smoke", "CFBundleExecutable": "Smoke",
-                 "CFBundleName": "Keyboard Smoke", "CFBundlePackageType": "APPL", "CFBundleVersion": "10",
+                 "CFBundleName": "Keyboard Smoke", "CFBundlePackageType": "APPL", "CFBundleVersion": "11",
                  "CFBundleShortVersionString": "1.0", "MinimumOSVersion": "16.0", "UIDeviceFamily": [2],
                  "CFBundleSupportedPlatforms": ["iPhoneSimulator"], "LSRequiresIPhoneOS": True,
                  "UILaunchScreen": {}, "UISupportedInterfaceOrientations": ["UIInterfaceOrientationLandscapeLeft"]}

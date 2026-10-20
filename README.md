@@ -1,5 +1,24 @@
 # EffectCraft native iPad preview
 
+## Preview build 11: pointer input, AE Bridge and fonts
+
+Build 10 hardware input works on the user's iPad. Build 11 wakes the real eframe
+event loop when native input arrives, including while the editor is idle.
+Public UIKit hover and secondary-button recognizers deliver pointer movement and
+right-click to egui. Both trim handles appear when hovering over a timeline bar.
+
+File now includes Import AE ZIP…, Export Project ZIP…, Save ZIP to Files… and
+Import Fonts…. ZIP export snapshots the project, packages referenced media using
+portable relative paths and presents the system save picker. The prepared ZIP
+can be saved again. Import uses the existing project-opening and unsaved-change
+flow. Packages use the stored ZIP format supported by the existing AE Bridge.
+Fonts (TTF/OTF/TTC/OTC) are validated, saved in EffectCraft Documents/Fonts and
+restored on launch; Character and rendered-frame caches refresh after import.
+
+Output: `EffectCraft-Native-Preview-11.ipa`, build 11. RAM remains 1 GiB.
+Simulator and automated tests do not replace physical mouse/trackpad testing
+inside LiveContainer.
+
 ## Preview build 10: UIKit keyboard focus
 
 The user reported no hardware input in build 9. Its window sendEvent override

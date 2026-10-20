@@ -186,7 +186,7 @@ static ECFolderPresenter *ECPresenter(NSString *path) {
     if ([action isEqual:@"export"]) {
         NSString *path = request[@"path"];
         if (![path isKindOfClass:NSString.class] || ![NSFileManager.defaultManager fileExistsAtPath:path]) { [self complete:@{@"error":@"The file is not ready to save"}]; return; }
-        self.picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[[NSURL fileURLWithPath:path]] asCopy:NO];
+        self.picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[[NSURL fileURLWithPath:path]] asCopy:[request[@"copy"] boolValue]];
     } else {
         if ([action isEqual:@"folder"]) {
             self.picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];

@@ -35,6 +35,14 @@ static NSMutableArray<NSString *> *Checks;
 @end
 @implementation TestPress
 @end
+@interface TestPointer : NSObject
+@property(nonatomic) UIGestureRecognizerState state;
+@property(nonatomic) CGPoint point;
+- (CGPoint)locationInView:(UIView *)view;
+@end
+@implementation TestPointer
+- (CGPoint)locationInView:(UIView *)view { (void)view; return self.point; }
+@end
 
 static void Finish(NSString *error) {
     NSDictionary *result = @{@"ok":@(!error), @"error":error ?: @"", @"checks":Checks};
@@ -77,7 +85,7 @@ static void After(double seconds, dispatch_block_t block) {
 @implementation TestDelegate
 - (BOOL)application:(UIApplication *)app didFinishLaunchingWithOptions:(NSDictionary *)options {
     (void)app; (void)options;
-    Checks=[NSMutableArray new]; TestRoot=ECKDirectory(); TestSession=[NSString stringWithFormat:@"%d-10",getpid()];
+    Checks=[NSMutableArray new]; TestRoot=ECKDirectory(); TestSession=[NSString stringWithFormat:@"%d-11",getpid()];
     [NSFileManager.defaultManager createDirectoryAtURL:TestRoot withIntermediateDirectories:YES attributes:nil error:NULL];
     TestWindow=[[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
     TestWindow.rootViewController=[WinitUIViewController new];
@@ -121,12 +129,22 @@ static void After(double seconds, dispatch_block_t block) {
                                 After(0.5, ^{
                                     Check(guest.isFirstResponder && ECKGuest==guest, @"guest presented inside a host retains hardware focus");
                                     Check(ECKHandle(guest,Press(44,YES,0)), @"host presentation does not block guest key capture");
-                                    [guest presentViewController:[UIViewController new] animated:NO completion:^{
-                                        After(0.5, ^{
-                                            Check(!ECKHandle(guest,Press(44,YES,0)), @"guest system modal still blocks editor keys");
-                                            Finish(nil);
-                                        });
-                                    }];
+                                    Check(ECKMouse.view==guest.view && ECKMouse.secondary.buttonMaskRequired==UIEventButtonMaskSecondary, @"hover and secondary click are installed on the guest view");
+                                    TestPointer *pointer=[TestPointer new];pointer.point=CGPointMake(120,200);pointer.state=UIGestureRecognizerStateChanged;
+                                    [ECKMouse hovering:(UIHoverGestureRecognizer *)(id)pointer];
+                                    pointer.state=UIGestureRecognizerStateRecognized;[ECKMouse rightClick:(UITapGestureRecognizer *)(id)pointer];
+                                    After(0.3, ^{
+                                        NSMutableArray *pointerRecords=[NSMutableArray new];
+                                        for (NSDictionary *record in Records()) if ([record[@"kind"] isEqual:@"pointer"]) [pointerRecords addObject:record];
+                                        Check(pointerRecords.count==3, @"hover and right click produce three ordered pointer records");
+                                        Check([pointerRecords[0][@"x"] doubleValue]==120 && [pointerRecords[1][@"down"] boolValue] && ![pointerRecords[2][@"down"] boolValue], @"secondary down/up preserve hover coordinates");
+                                        [guest presentViewController:[UIViewController new] animated:NO completion:^{
+                                            After(0.5, ^{
+                                                Check(!ECKHandle(guest,Press(44,YES,0)), @"guest system modal still blocks editor keys");
+                                                Finish(nil);
+                                            });
+                                        }];
+                                    });
                                 });
                             }];
                         });

@@ -12,6 +12,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-frontend-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare pinned source
+        run: |
+          git init effectcraft
+          git -C effectcraft remote add origin https://github.com/storytold/effectcraft.git
+          git -C effectcraft fetch --depth 1 origin 05955c08b4fd025f1a09882df72e6dbff1a8148a
+          git -C effectcraft checkout --detach FETCH_HEAD
+          git -C effectcraft apply ../patches/ipad-native.patch
+      - name: Install Rust
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Test native Bridge, fonts, input and timeline trimming
+        working-directory: effectcraft
+        run: |
+          cargo +1.95.0 test --locked -p effectcraft-ios --features eframe/x11
+          cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --test ui_timeline_trim
   uikit-keyboard:
     runs-on: macos-15
     timeout-minutes: 10
@@ -48,7 +71,7 @@ jobs:
         run: |
           rustc +1.95.0 --edition 2024 --test effectcraft/apps/effectcraft-ios/src/journal.rs -o /tmp/ec-journal-tests
           /tmp/ec-journal-tests
-          rustc +1.95.0 --edition 2024 --test effectcraft/apps/effectcraft-ios/src/project_zip.rs -o /tmp/ec-project-zip-tests
+          rustc +1.95.0 --edition 2024 --test tests/archive_tests.rs -o /tmp/ec-project-zip-tests
           /tmp/ec-project-zip-tests
           cp effectcraft/apps/effectcraft-ios/src/key_codes.rs tests/hardware-keys/src/key_codes.rs
           cp effectcraft/apps/effectcraft-ios/src/keyboard.rs tests/hardware-keys/src/keyboard.rs

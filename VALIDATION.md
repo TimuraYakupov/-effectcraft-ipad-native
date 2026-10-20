@@ -1,5 +1,24 @@
 # Validation — 2026-10-18
 
+## Preview build 11 — 2026-10-20 UTC
+
+Device feedback confirms build 10 keyboard delivery. Reported regressions are
+idle shortcut latency, missing hover/right-click, absent native AE Bridge menus
+and missing custom font installation. The wrapper now supplies these native host
+hooks without changing the engine's interchange schema or editor shortcuts.
+
+Checks cover idle-input repaint callback, secondary-button event ordering, actual
+File-menu visibility, timeline context menu and trimming, portable project/media
+ZIP round trip, persistent and duplicate font registration, bounded ZIP input,
+diagnostic journal and IPA metadata. Python zipfile independently validates the
+writer's central directory, Unicode names and CRC. Optional headless snapshots
+exercise the native File menu, hovered layer bar and layer context menu.
+
+Actions runs the full native frontend tests on Linux, UIKit responder/pointer
+callback smoke test on iPad Simulator, and ARM64 iOS release compilation. Pointer
+callbacks use synthetic recognizer state; actual mouse/trackpad behavior and
+end-to-end AE application import still require device/application verification.
+
 ## Preview build 10 — 2026-10-19 UTC
 
 Device feedback: keyboard still does not work in build 9. Its Rust event-translation

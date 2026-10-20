@@ -59,12 +59,331 @@ index 00000000..b44ad8d1
 +
 +[dev-dependencies]
 +egui_kittest = { workspace = true, features = ["wgpu"] }
+diff --git a/apps/effectcraft-ios/src/bridge.rs b/apps/effectcraft-ios/src/bridge.rs
+new file mode 100644
+index 00000000..5728466c
+--- /dev/null
++++ b/apps/effectcraft-ios/src/bridge.rs
+@@ -0,0 +1,313 @@
++//! Native implementation of the same File-menu Bridge commands as the web host.
++use crate::native_documents::NativeDocuments;
++use effectcraft_ui_egui::{
++    EffectcraftApp,
++    menus::{self, BridgeState},
++};
++use eframe::egui;
++use serde_json::{Value, json};
++use std::{
++    cell::RefCell,
++    path::{Path, PathBuf},
++    rc::Rc,
++    sync::mpsc::{self, Receiver},
++};
++
++enum Done {
++    Zip(PathBuf),
++    Fonts(String),
++}
++enum Pending {
++    Fonts(String, PathBuf),
++    Save(String),
++}
++pub struct Bridge {
++    state: Rc<RefCell<BridgeState>>,
++    commands: Receiver<String>,
++    work: Option<Receiver<Result<Done, String>>>,
++    pending: Option<Pending>,
++    prepared: Option<PathBuf>,
++    native: NativeDocuments,
++    documents: PathBuf,
++}
++pub fn documents() -> PathBuf {
++    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
++    crate::files::documents_folder(&home).0
++}
++impl Bridge {
++    pub fn install(app: &mut EffectcraftApp, ctx: &egui::Context, native: NativeDocuments) -> Self {
++        let state = Rc::new(RefCell::new(BridgeState { import_enabled: true, export_enabled: true, fonts_enabled: true, ..Default::default() }));
++        let observed = state.clone();
++        app.hooks.bridge_state = Some(Box::new(move || Some(observed.borrow().clone())));
++        let (send, commands) = mpsc::sync_channel(8);
++        let wake = ctx.clone();
++        app.hooks.bridge_action = Some(Box::new(move |id| {
++            send.try_send(id.to_string()).map_err(|_| "Bridge is busy".to_string())?;
++            wake.request_repaint();
++            Ok(())
++        }));
++        Self { state, commands, work: None, pending: None, prepared: None, native, documents: documents() }
++    }
++    pub fn is_open(&self) -> bool {
++        self.work.is_some() || self.pending.is_some()
++    }
++    fn spawn(&mut self, ctx: &egui::Context, job: impl FnOnce() -> Result<Done, String> + Send + 'static) -> Result<(), String> {
++        let (send, receive) = mpsc::sync_channel(1);
++        let wake = ctx.clone();
++        std::thread::Builder::new()
++            .name("ec-bridge".into())
++            .stack_size(8 << 20)
++            .spawn(move || {
++                let result = job();
++                let _ = send.send(result);
++                wake.request_repaint();
++            })
++            .map_err(|e| e.to_string())?;
++        self.work = Some(receive);
++        Ok(())
++    }
++    fn command(&mut self, id: &str, app: &mut EffectcraftApp, ctx: &egui::Context) -> Result<(), String> {
++        if self.is_open() {
++            return Err("Wait for the current Bridge operation".into());
++        }
++        match id {
++            "bridge.importAEZip" => {
++                menus::invoke(app, ctx, "file.open", json!({}))?;
++            }
++            "bridge.exportProjectZip" => {
++                app.stop();
++                if let Some(old) = self.prepared.take() {
++                    let _ = std::fs::remove_file(&old);
++                    if let Some(parent) = old.parent() {
++                        let _ = std::fs::remove_dir(parent);
++                    }
++                }
++                let project = app.session.project.clone();
++                let view = app.session.saved_view();
++                let output = self.native.staging("EffectCraft-Bridge.zip", "zip")?;
++                let native = self.native.clone();
++                self.spawn(ctx, move || {
++                    let text = project.to_file_json_with_view(&view).map_err(|e| e.to_string())?;
++                    if text.len() > 32 << 20 {
++                        return Err("Project JSON exceeds 32 MiB".into());
++                    }
++                    export(text, &output, &native).map(Done::Zip)
++                })?;
++                app.ui.status = "Packaging project and media for After Effects…".into();
++            }
++            "bridge.saveZipToFiles" => {
++                let path = self.prepared.as_ref().ok_or("Export Project ZIP first")?;
++                self.pending = Some(Pending::Save(self.native.export_copy(path)?));
++            }
++            "bridge.importFonts" => {
++                app.stop();
++                let path = self.native.staging("Fonts", "directory")?;
++                let folder = path.parent().ok_or("Font staging folder unavailable")?.join("Font Imports");
++                self.pending = Some(Pending::Fonts(self.native.open(true, Some(&folder))?, folder));
++            }
++            _ => return Err("Unknown Bridge action".into()),
++        }
++        Ok(())
++    }
++    pub fn show(&mut self, app: &mut EffectcraftApp, ctx: &egui::Context) {
++        if let Ok(command) = self.commands.try_recv() {
++            if let Err(error) = self.command(&command, app, ctx) {
++                app.ui.status = error;
++            }
++        }
++        if let Some(pending) = &self.pending {
++            let id = match pending {
++                Pending::Fonts(id, _) | Pending::Save(id) => id,
++            };
++            if let Some(result) = self.native.poll(id) {
++                let pending = self.pending.take();
++                match (pending, result) {
++                    (Some(Pending::Fonts(_, folder)), Ok(value)) if value["cancelled"].as_bool() != Some(true) => {
++                        let paths: Vec<PathBuf> = value["paths"].as_array().into_iter().flatten().filter_map(Value::as_str).map(PathBuf::from).collect();
++                        let root = self.documents.join("Fonts");
++                        if let Err(error) = self.spawn(ctx, move || {
++                            let result = crate::user_fonts::import(&root, &paths).map(Done::Fonts);
++                            // This is the per-operation cache folder, never the original files.
++                            let _ = std::fs::remove_dir_all(&folder);
++                            result
++                        }) {
++                            app.ui.status = error;
++                        }
++                    }
++                    (_, Ok(value)) => {
++                        app.ui.status = if value["cancelled"].as_bool() == Some(true) {
++                            "Bridge file selection cancelled".into()
++                        } else {
++                            "Bridge ZIP saved to Files".into()
++                        };
++                    }
++                    (_, Err(error)) => app.ui.status = error,
++                }
++            }
++        }
++        if let Some(receiver) = &self.work {
++            match receiver.try_recv() {
++                Ok(result) => {
++                    self.work = None;
++                    match result {
++                        Ok(Done::Zip(path)) => {
++                            self.prepared = Some(path);
++                            app.ui.status = "Bridge ZIP ready. File → Save ZIP to Files… chooses the destination.".into();
++                            if let Some(path) = &self.prepared {
++                                match self.native.export_copy(path) {
++                                    Ok(id) => self.pending = Some(Pending::Save(id)),
++                                    Err(e) => app.ui.status = e,
++                                }
++                            }
++                        }
++                        Ok(Done::Fonts(report)) => {
++                            if let Err(e) = app.session.execute("edit.purge", json!({"what":"memoryAndDisk"})) {
++                                log::warn!("Font cache refresh: {e}");
++                            }
++                            app.frames.clear();
++                            app.session.revision = app.session.revision.saturating_add(1);
++                            app.ui.status = report;
++                        }
++                        Err(error) => app.ui.status = error,
++                    }
++                }
++                Err(mpsc::TryRecvError::Disconnected) => {
++                    self.work = None;
++                    app.ui.status = "Bridge worker stopped before completing".into();
++                }
++                Err(mpsc::TryRecvError::Empty) => {}
++            }
++        }
++        let idle = !self.is_open();
++        *self.state.borrow_mut() = BridgeState {
++            import_enabled: idle,
++            export_enabled: idle && !app.session.project.items.is_empty(),
++            save_enabled: idle && self.prepared.is_some(),
++            fonts_enabled: idle,
++            status: String::new(),
++        };
++        if self.is_open() {
++            ctx.request_repaint_after(std::time::Duration::from_millis(50));
++        }
++    }
++}
++
++fn export(text: String, output: &Path, native: &NativeDocuments) -> Result<PathBuf, String> {
++    let mut doc: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
++    let items = doc["items"].as_object_mut().ok_or("Project items are missing")?;
++    let mut entries = Vec::new();
++    let mut copies = Vec::new();
++    for (id, item) in items {
++        if item["kind"]["type"].as_str() != Some("Footage") {
++            continue;
++        }
++        let source = item["kind"]["path"].as_str().ok_or("Footage has no source path")?.to_string();
++        let original = PathBuf::from(&source);
++        if !original.is_absolute() {
++            return Err(format!("Re-import missing media before Bridge export: {source}"));
++        }
++        let copy = native.copy_read(&original)?;
++        let path = copy.as_ref().map(|c| c.path.clone()).unwrap_or(original.clone());
++        let ext = original.extension().and_then(|x| x.to_str()).filter(|s| s.len() <= 10 && s.bytes().all(|b| b.is_ascii_alphanumeric())).unwrap_or("bin");
++        let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric()).take(80).collect();
++        let target = format!("assets/media_{id}.{ext}");
++        item["kind"]["path"] = json!(target);
++        item["kind"]["missing"] = json!(false);
++        entries.push((target, path));
++        if let Some(copy) = copy {
++            copies.push(copy);
++        }
++    }
++    let project = output.with_extension("ecproj");
++    let data = serde_json::to_vec(&doc).map_err(|e| e.to_string())?;
++    if data.len() > 32 << 20 {
++        return Err("Project JSON exceeds 32 MiB".into());
++    }
++    std::fs::write(&project, data).map_err(|e| e.to_string())?;
++    entries.insert(0, ("EffectCraft.ecproj".into(), project.clone()));
++    let result = crate::store_zip::write(output, &entries);
++    let _ = std::fs::remove_file(project);
++    drop(copies);
++    result.map(|_| output.to_path_buf())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn restored_file_commands_are_visible_in_the_native_menu() {
++        use egui::{Event, Modifiers, PointerButton, pos2, vec2};
++        use egui_kittest::Harness;
++        let mut session = effectcraft_host::session();
++        session.execute("comp.new", json!({"name":"Native input", "width":320, "height":180, "frameRate":30, "duration":10})).unwrap();
++        let layer = session.execute("layer.newSolid", json!({"name":"Hover to trim", "color":"#406080"})).unwrap()["layer"].as_u64().unwrap();
++        session.execute("layer.timing", json!({"layers":[layer],"in":2.0,"out":6.0})).unwrap();
++        let mut app = EffectcraftApp::new(session);
++        app.ui.start_screen = false;
++        let mut host = None;
++        let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_eframe(|cc| {
++            host = Some(Bridge::install(&mut app, &cc.egui_ctx, NativeDocuments::new()));
++            app
++        });
++        h.run_steps(4);
++        let bar = h.state().auto.find(&format!("timeline.layer.{layer}.bar")).unwrap().rect;
++        let center = pos2(bar[0] + bar[2] / 2.0, bar[1] + bar[3] / 2.0);
++        h.event(Event::PointerMoved(center));
++        h.run_steps(3);
++        let screenshot = |h: &mut Harness<'_, EffectcraftApp>, name: &str| {
++            if let Some(root) = std::env::var_os("EC_IPAD_SNAPSHOTS") {
++                let root = PathBuf::from(root);
++                std::fs::create_dir_all(&root).unwrap();
++                h.render().unwrap().save(root.join(name)).unwrap();
++            }
++        };
++        screenshot(&mut h, "native-hover-trim.png");
++        for pressed in [true, false] {
++            h.event(Event::PointerButton { pos: center, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
++        }
++        h.run_steps(3);
++        assert!(egui::Popup::is_any_open(&h.ctx));
++        screenshot(&mut h, "native-context-menu.png");
++        h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
++        h.run_steps(3);
++        let menu = h.state().auto.find("menu.File").unwrap().rect;
++        let pos = pos2(menu[0] + menu[2] / 2.0, menu[1] + menu[3] / 2.0);
++        h.event(Event::PointerMoved(pos));
++        for pressed in [true, false] {
++            h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
++            h.step();
++        }
++        h.run_steps(3);
++        for id in ["bridge.importAEZip", "bridge.exportProjectZip", "bridge.saveZipToFiles", "bridge.importFonts"] {
++            assert!(h.state().auto.find(&format!("menu.command.{id}")).is_some(), "missing native File command {id}");
++        }
++        screenshot(&mut h, "native-file-menu.png");
++        drop(host);
++    }
++    #[test]
++    fn bridge_export_is_portable_and_does_not_change_the_open_project() {
++        let root = std::env::temp_dir().join(format!("ec-native-bridge-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        std::fs::create_dir_all(&root).unwrap();
++        let media = root.join("Клип с пробелом.png");
++        std::fs::write(&media, [1, 2, 3, 4, 5]).unwrap();
++        let document = json!({"schema":2,"items":{"7":{"name":"Clip","kind":{"type":"Footage","path":media,"missing":true}}}});
++        let original = document.to_string();
++        let output = root.join("ForAE.zip");
++        export(original.clone(), &output, &NativeDocuments::new()).unwrap();
++        assert_eq!(document.to_string(), original);
++        let imported = crate::project_zip::import(&output, &root, &std::sync::atomic::AtomicBool::new(false)).unwrap();
++        let restored: Value = serde_json::from_slice(&std::fs::read(&imported).unwrap()).unwrap();
++        assert_eq!(restored["items"]["7"]["kind"]["path"], "assets/media_7.png");
++        assert_eq!(restored["items"]["7"]["kind"]["missing"], false);
++        assert_eq!(std::fs::read(imported.parent().unwrap().join("assets/media_7.png")).unwrap(), [1, 2, 3, 4, 5]);
++        let mut app = EffectcraftApp::new(effectcraft_host::session());
++        let bridge = Bridge::install(&mut app, &egui::Context::default(), NativeDocuments::new());
++        let items = menus::menu_items(&app);
++        for id in ["bridge.importAEZip", "bridge.exportProjectZip", "bridge.saveZipToFiles", "bridge.importFonts"] {
++            assert!(items.iter().any(|i| i.id == id));
++        }
++        assert!(!bridge.state.borrow().save_enabled);
++        let _ = std::fs::remove_dir_all(root);
++    }
++}
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..e3684ae1
+index 00000000..0a36a1bc
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,208 @@
 +//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
 +use std::path::PathBuf;
 +
@@ -74,6 +393,7 @@ index 00000000..e3684ae1
 +pub struct DiagnosticApp {
 +    pub app: EffectcraftApp,
 +    pub files: crate::files::Files,
++    pub bridge: crate::bridge::Bridge,
 +    pub keyboard: crate::keyboard::Keyboard,
 +    pub directory: PathBuf,
 +    pub startup_error: Option<String>,
@@ -120,7 +440,7 @@ index 00000000..e3684ae1
 +    }
 +
 +    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
-+        if let Err(error) = self.keyboard.input(ctx, input, self.files.is_open() || self.open) {
++        if let Err(error) = self.keyboard.input(ctx, input, self.files.is_open() || self.bridge.is_open() || self.open) {
 +            self.app.ui.status = error;
 +        }
 +        self.app.raw_input_hook(ctx, input);
@@ -133,17 +453,19 @@ index 00000000..e3684ae1
 +            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
 +            .order(egui::Order::Foreground)
 +            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 10").clicked() {
++                if ui.button("Diagnostics · build 11").clicked() {
 +                    self.open = !self.open;
 +                    self.refresh();
 +                }
 +            });
 +        if self.open {
++            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 10").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("iPad preview & diagnostics · build 11").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
 +                ui.label(&self.keyboard.native_status);
 +                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
++                ui.label(format!("Pointer events received: {}", self.keyboard.pointer_received));
 +                ui.separator();
 +                ui.label("One render worker · layer/media caches: 64 MiB each");
 +                ui.horizontal(|ui| {
@@ -257,9 +579,10 @@ index 00000000..e3684ae1
 +            self.open = open;
 +        }
 +        self.files.show(&mut self.app, ctx);
++        self.bridge.show(&mut self.app, ctx);
 +        // Diagnostics keeps native capture active for its live key counter; the
 +        // input hook suppresses project commands while that window is open.
-+        if let Err(error) = self.keyboard.output(ctx, self.files.is_open()) {
++        if let Err(error) = self.keyboard.output(ctx, self.files.is_open() || self.bridge.is_open()) {
 +            self.app.ui.status = error;
 +        }
 +    }
@@ -271,10 +594,10 @@ index 00000000..e3684ae1
 +}
 diff --git a/apps/effectcraft-ios/src/files.rs b/apps/effectcraft-ios/src/files.rs
 new file mode 100644
-index 00000000..c9fc97b2
+index 00000000..93f9abf8
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/files.rs
-@@ -0,0 +1,674 @@
+@@ -0,0 +1,677 @@
 +//! App-local file dialogs, shared with Files through UIFileSharingEnabled.
 +use std::collections::BTreeSet;
 +use std::path::{Component, Path, PathBuf};
@@ -318,7 +641,7 @@ index 00000000..c9fc97b2
 +    export_only: bool,
 +}
 +
-+fn documents_folder(home: &Path) -> (PathBuf, String) {
++pub(crate) fn documents_folder(home: &Path) -> (PathBuf, String) {
 +    // LiveContainer's guest HOME is inside its shared Documents/Data/Application/<id>.
 +    // Put user projects beside Data, where Files can reach them without opening UUID folders.
 +    let text = home.to_string_lossy();
@@ -355,6 +678,9 @@ index 00000000..c9fc97b2
 +}
 +
 +impl Files {
++    pub fn native_documents(&self) -> crate::native_documents::NativeDocuments {
++        self.native.clone()
++    }
 +    pub fn is_open(&self) -> bool {
 +        self.active.is_some() || self.export_only || self.native_pending.is_some() || self.unpacking.is_some()
 +    }
@@ -1072,10 +1398,10 @@ index 00000000..9b1a92dc
 +}
 diff --git a/apps/effectcraft-ios/src/keyboard.rs b/apps/effectcraft-ios/src/keyboard.rs
 new file mode 100644
-index 00000000..67392da6
+index 00000000..6b505fde
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/keyboard.rs
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,420 @@
 +//! Bounded hardware-keyboard input, delivered before egui processes RawInput.
 +use eframe::egui::{self, Event, Key, Modifiers};
 +use serde_json::{Value, json};
@@ -1096,6 +1422,8 @@ index 00000000..67392da6
 +    pub native_status: String,
 +    pub last_key: String,
 +    last_status_read: std::time::Instant,
++    wake: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
++    pub pointer_received: u64,
 +}
 +
 +fn read_bounded(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
@@ -1122,7 +1450,7 @@ index 00000000..67392da6
 +        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
 +        let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|t| t.as_nanos()).unwrap_or(0);
 +        Self {
-+            directory: home.join("Library/Caches/EffectCraft/Keyboard10"),
++            directory: home.join("Library/Caches/EffectCraft/Keyboard11"),
 +            session: format!("{}-{time}", std::process::id()),
 +            held: BTreeSet::new(),
 +            modifiers: Modifiers::NONE,
@@ -1131,6 +1459,8 @@ index 00000000..67392da6
 +            native_status: "Waiting for UIKit keyboard status".into(),
 +            last_key: "No key received".into(),
 +            last_status_read: std::time::Instant::now(),
++            wake: None,
++            pointer_received: 0,
 +        }
 +    }
 +    fn reset(&mut self, events: &mut Vec<Event>) {
@@ -1141,6 +1471,21 @@ index 00000000..67392da6
 +        events.push(Event::ModifiersChanged(self.modifiers));
 +    }
 +    fn record(&mut self, value: &Value, text_focus: bool, blocked: bool, events: &mut Vec<Event>) -> Result<(), String> {
++        if value["kind"].as_str() == Some("pointer") {
++            self.pointer_received = self.pointer_received.saturating_add(1);
++            if value["phase"].as_str() == Some("gone") {
++                events.push(Event::PointerGone);
++                return Ok(());
++            }
++            let x = value["x"].as_f64().filter(|v| v.is_finite() && v.abs() < 100_000.0).ok_or("Invalid pointer X")?;
++            let y = value["y"].as_f64().filter(|v| v.is_finite() && v.abs() < 100_000.0).ok_or("Invalid pointer Y")?;
++            let pos = egui::pos2(x as f32, y as f32);
++            events.push(Event::PointerMoved(pos));
++            if let Some(down) = value["down"].as_bool() {
++                events.push(Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: down, modifiers: self.modifiers });
++            }
++            return Ok(());
++        }
 +        if value["kind"].as_str() == Some("reset") {
 +            self.reset(events);
 +            return Ok(());
@@ -1250,7 +1595,17 @@ index 00000000..67392da6
 +            let result = read_bounded(&file, MAX_RECORD)
 +                .map_err(|e| e.to_string())
 +                .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|e| e.to_string()))
-+                .and_then(|value| self.record(&value, text_focus, blocked && !text_focus, &mut input.events));
++                .and_then(|mut value| {
++                    if value["kind"].as_str() == Some("pointer") {
++                        let zoom = f64::from(ctx.zoom_factor());
++                        for axis in ["x", "y"] {
++                            if let Some(v) = value[axis].as_f64() {
++                                value[axis] = json!(v / zoom.max(0.1));
++                            }
++                        }
++                    }
++                    self.record(&value, text_focus, blocked && !text_focus, &mut input.events)
++                });
 +            let _ = std::fs::remove_file(file);
 +            if let Err(e) = result {
 +                self.reset(&mut input.events);
@@ -1263,8 +1618,6 @@ index 00000000..67392da6
 +        if !self.held.is_empty() {
 +            ctx.request_repaint();
 +        }
-+        // File-backed IPC has no winit wake event; poll cheaply while the app is idle.
-+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
 +        if let Some(error) = error { Err(error) } else { Ok(()) }
 +    }
 +    pub fn output(&mut self, ctx: &egui::Context, blocked: bool) -> Result<(), String> {
@@ -1282,6 +1635,9 @@ index 00000000..67392da6
 +            write_atomic(&self.directory.join("state.json"), &bytes).map_err(|e| e.to_string())?;
 +            self.mode = Some(mode);
 +        }
++        if self.wake.is_none() {
++            self.wake = Some(start_wake(self.directory.clone(), self.session.clone(), ctx.clone())?);
++        }
 +        let copied = ctx.output(|o| o.commands.iter().rev().find_map(|c| if let egui::OutputCommand::CopyText(t) = c { Some(t.clone()) } else { None }));
 +        if let Some(text) = copied {
 +            if text.len() > MAX_CLIPBOARD {
@@ -1294,9 +1650,90 @@ index 00000000..67392da6
 +    }
 +}
 +
++// Repaint requests made in raw_input_hook can be superseded when egui begins its
++// next pass. Wake eframe's event loop from an input watcher even while UI is idle.
++fn start_wake(directory: PathBuf, session: String, ctx: egui::Context) -> Result<std::sync::Arc<std::sync::atomic::AtomicBool>, String> {
++    use std::sync::{
++        Arc,
++        atomic::{AtomicBool, Ordering},
++    };
++    let running = Arc::new(AtomicBool::new(true));
++    let flag = running.clone();
++    std::thread::Builder::new()
++        .name("ec-input-wake".into())
++        .stack_size(256 << 10)
++        .spawn(move || {
++            let prefix = format!("{session}-");
++            while flag.load(Ordering::Relaxed) {
++                let pending = std::fs::read_dir(&directory).ok().is_some_and(|entries| {
++                    entries.take(512).filter_map(Result::ok).any(|entry| {
++                        let name = entry.file_name();
++                        let name = name.to_string_lossy();
++                        name.starts_with(&prefix) && name.ends_with(".key")
++                    })
++                });
++                if pending {
++                    ctx.request_repaint();
++                }
++                std::thread::sleep(std::time::Duration::from_millis(16));
++            }
++        })
++        .map_err(|e| format!("Could not start input wake service: {e}"))?;
++    Ok(running)
++}
++
++impl Drop for Keyboard {
++    fn drop(&mut self) {
++        if let Some(wake) = &self.wake {
++            wake.store(false, std::sync::atomic::Ordering::Relaxed);
++        }
++    }
++}
++
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
++    #[test]
++    fn idle_input_wakes_the_actual_egui_repaint_callback() {
++        use std::sync::{
++            Arc,
++            atomic::{AtomicUsize, Ordering},
++        };
++        let root = std::env::temp_dir().join(format!("ec-wake-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        std::fs::create_dir_all(&root).unwrap();
++        let ctx = egui::Context::default();
++        // Drain egui's initial two-pass repaint request before simulating idle.
++        for _ in 0..3 {
++            let mut output = ctx.run_ui(Default::default(), |_| {});
++            output.textures_delta.clear();
++        }
++        let count = Arc::new(AtomicUsize::new(0));
++        let observed = count.clone();
++        ctx.set_request_repaint_callback(move |_| {
++            observed.fetch_add(1, Ordering::Relaxed);
++        });
++        let flag = start_wake(root.clone(), "123-11".into(), ctx).unwrap();
++        std::fs::write(root.join("123-11-0001.key"), b"{}").unwrap();
++        let start = std::time::Instant::now();
++        while count.load(Ordering::Relaxed) == 0 && start.elapsed() < std::time::Duration::from_millis(300) {
++            std::thread::sleep(std::time::Duration::from_millis(5));
++        }
++        flag.store(false, Ordering::Relaxed);
++        assert!(count.load(Ordering::Relaxed) > 0, "idle eframe event loop was never woken");
++        let _ = std::fs::remove_dir_all(root);
++    }
++    #[test]
++    fn hover_and_secondary_click_preserve_order_and_do_not_become_primary_clicks() {
++        let mut bridge = Keyboard::new();
++        let mut events = vec![];
++        for down in [true, false] {
++            bridge.record(&json!({"kind":"pointer","x":42.5,"y":64.0,"down":down}), false, false, &mut events).unwrap();
++        }
++        assert_eq!(events.iter().filter(|e| matches!(e, Event::PointerButton { button: egui::PointerButton::Secondary, .. })).count(), 2);
++        assert!(!events.iter().any(|e| matches!(e, Event::PointerButton { button: egui::PointerButton::Primary, .. })));
++        assert!(bridge.record(&json!({"kind":"pointer","x":1e300,"y":0}), false, false, &mut events).is_err());
++    }
 +    fn key(code: u32, down: bool, modifiers: u64) -> Value {
 +        json!({"kind":"key","code":code,"down":down,"flags":modifiers})
 +    }
@@ -1387,16 +1824,17 @@ index 00000000..67392da6
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..425456f4
+index 00000000..2618f0aa
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,105 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
 +//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 +
 +use effectcraft_ui_egui::EffectcraftApp;
 +use serde_json::json;
++mod bridge;
 +mod diagnostics;
 +mod files;
 +mod journal;
@@ -1404,13 +1842,15 @@ index 00000000..425456f4
 +mod keyboard;
 +mod native_documents;
 +mod project_zip;
++mod store_zip;
++mod user_fonts;
 +
 +fn main() -> eframe::Result {
 +    effectcraft_engine::logging::install();
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=10 startup workers=1 preview_mib=1024 disk_gib=1 hardware_keyboard=responder_chain");
++    log::info!(target: "effectcraft_diagnostics", "build=11 startup workers=1 preview_mib=1024 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1441,6 +1881,9 @@ index 00000000..425456f4
 +            if let Some(rs) = &cc.wgpu_render_state {
 +                log::info!("native iPad adapter: {:?}", rs.adapter.get_info());
 +            }
++            for error in user_fonts::restore(&bridge::documents().join("Fonts")) {
++                log::warn!("User font restore: {error}");
++            }
 +            let mut session = effectcraft_host::session();
 +            session.prefs.memory.layer_cache_mb = 64;
 +            session.prefs.memory.media_cache_mb = 64;
@@ -1453,7 +1896,7 @@ index 00000000..425456f4
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => "Build 10: UIKit keyboard focus and live key diagnostics. Space: preview; Cmd/Ctrl+S: save. RAM: 1 GiB.".to_string(),
++                Ok(_) => "Build 11: hardware input, pointer hover, AE Bridge and custom fonts. RAM: 1 GiB.".to_string(),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -1474,9 +1917,11 @@ index 00000000..425456f4
 +            }
 +            app.set_gpu_failure_bridge(failures);
 +            let files = files::Files::install(&mut app, &cc.egui_ctx);
++            let bridge = bridge::Bridge::install(&mut app, &cc.egui_ctx, files.native_documents());
 +            Ok(Box::new(diagnostics::DiagnosticApp {
 +                app,
 +                files,
++                bridge,
 +                keyboard: keyboard::Keyboard::new(),
 +                directory,
 +                startup_error,
@@ -1490,10 +1935,10 @@ index 00000000..425456f4
 +}
 diff --git a/apps/effectcraft-ios/src/native_documents.rs b/apps/effectcraft-ios/src/native_documents.rs
 new file mode 100644
-index 00000000..d3ab29d7
+index 00000000..50ce5610
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/native_documents.rs
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,193 @@
 +//! Safe Rust side of the wrapper's UIKit folder picker and coordinated file access.
 +use effectcraft_engine::Services;
 +use serde_json::{Value, json};
@@ -1563,6 +2008,9 @@ index 00000000..d3ab29d7
 +    }
 +    pub fn export(&self, file: &Path) -> Result<String, String> {
 +        self.pick(json!({"action":"export", "path":file}))
++    }
++    pub fn export_copy(&self, file: &Path) -> Result<String, String> {
++        self.pick(json!({"action":"export", "path":file, "copy":true}))
 +    }
 +    fn pick(&self, request: Value) -> Result<String, String> {
 +        if !self.available() {
@@ -1899,6 +2347,304 @@ index 00000000..03464fe5
 +            assert!(relative_name(bad).is_err(), "{bad}");
 +        }
 +        assert_eq!(relative_name("media/a.png").unwrap(), PathBuf::from("media/a.png"));
++    }
++}
+diff --git a/apps/effectcraft-ios/src/store_zip.rs b/apps/effectcraft-ios/src/store_zip.rs
+new file mode 100644
+index 00000000..d1455a87
+--- /dev/null
++++ b/apps/effectcraft-ios/src/store_zip.rs
+@@ -0,0 +1,157 @@
++//! Bounded streaming ZIP writer, stored entries (PKWARE APPNOTE 6.3).
++use std::collections::HashSet;
++use std::io::{Read, Seek, Write};
++use std::path::{Path, PathBuf};
++
++fn crc_bytes(mut value: u32, bytes: &[u8]) -> Result<u32, String> {
++    static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
++    let table = TABLE.get_or_init(|| {
++        let mut table = [0_u32; 256];
++        for (i, slot) in table.iter_mut().enumerate() {
++            let mut c = i as u32;
++            for _ in 0..8 {
++                c = (c >> 1) ^ (0xedb88320_u32.wrapping_mul(c & 1));
++            }
++            *slot = c;
++        }
++        table
++    });
++    for byte in bytes {
++        value = (value >> 8) ^ table.get(((value ^ u32::from(*byte)) & 255) as usize).ok_or("Invalid CRC index")?;
++    }
++    Ok(value)
++}
++fn crc(path: &Path) -> Result<(u32, u32), String> {
++    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
++    let length = u32::try_from(file.metadata().map_err(|e| e.to_string())?.len()).map_err(|_| "ZIP entry exceeds 4 GiB")?;
++    if u64::from(length) > 512 << 20 {
++        return Err("Bridge media exceeds 512 MiB".into());
++    }
++    let mut file = file.take(u64::from(length).saturating_add(1));
++    let mut read = 0_u64;
++    let mut value = !0_u32;
++    let mut buffer = [0_u8; 65536];
++    loop {
++        let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
++        if n == 0 {
++            break;
++        }
++        read = read.saturating_add(n as u64);
++        value = crc_bytes(value, buffer.get(..n).ok_or("Invalid read size")?)?;
++    }
++    if read != u64::from(length) {
++        return Err("Media changed during ZIP export; retry".into());
++    }
++    Ok((!value, length))
++}
++fn u16le(w: &mut impl Write, value: u16) -> Result<(), String> {
++    w.write_all(&value.to_le_bytes()).map_err(|e| e.to_string())
++}
++fn u32le(w: &mut impl Write, value: u32) -> Result<(), String> {
++    w.write_all(&value.to_le_bytes()).map_err(|e| e.to_string())
++}
++
++pub fn write(output: &Path, entries: &[(String, PathBuf)]) -> Result<(), String> {
++    if entries.is_empty() || entries.len() > 4096 {
++        return Err("ZIP needs 1–4096 entries".into());
++    }
++    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output).map_err(|e| e.to_string())?;
++    let result = (|| {
++        let mut names = HashSet::new();
++        let mut central = Vec::new();
++        let mut total = 0_u64;
++        for (name, path) in entries {
++            if !names.insert(name.clone()) {
++                return Err("Duplicate ZIP filename".into());
++            }
++            crate::project_zip::relative_name(name)?;
++            let name_len = u16::try_from(name.len()).map_err(|_| "ZIP filename too long")?;
++            let (checksum, size) = crc(path)?;
++            total = total.checked_add(u64::from(size)).ok_or("ZIP size overflow")?;
++            if total > 512 << 20 {
++                return Err("Bridge package exceeds 512 MiB".into());
++            }
++            let offset = u32::try_from(file.stream_position().map_err(|e| e.to_string())?).map_err(|_| "ZIP offset overflow")?;
++            u32le(&mut file, 0x04034b50)?;
++            for n in [20, 0x800, 0, 0, 0x21] {
++                u16le(&mut file, n)?;
++            }
++            for n in [checksum, size, size] {
++                u32le(&mut file, n)?;
++            }
++            u16le(&mut file, name_len)?;
++            u16le(&mut file, 0)?;
++            file.write_all(name.as_bytes()).map_err(|e| e.to_string())?;
++            let mut input = std::fs::File::open(path).map_err(|e| e.to_string())?.take(u64::from(size).saturating_add(1));
++            let mut buffer = [0_u8; 65536];
++            let mut copied = 0_u64;
++            let mut copied_crc = !0_u32;
++            loop {
++                let n = input.read(&mut buffer).map_err(|e| e.to_string())?;
++                if n == 0 {
++                    break;
++                }
++                let bytes = buffer.get(..n).ok_or("Invalid read size")?;
++                copied = copied.saturating_add(n as u64);
++                copied_crc = crc_bytes(copied_crc, bytes)?;
++                file.write_all(bytes).map_err(|e| e.to_string())?;
++            }
++            if copied != u64::from(size) || !copied_crc != checksum {
++                return Err("Media changed during ZIP export; retry".into());
++            }
++            central.push((name, name_len, checksum, size, offset));
++        }
++        let start = u32::try_from(file.stream_position().map_err(|e| e.to_string())?).map_err(|_| "ZIP offset overflow")?;
++        for (name, len, checksum, size, offset) in central {
++            u32le(&mut file, 0x02014b50)?;
++            for n in [20, 20, 0x800, 0, 0, 0x21] {
++                u16le(&mut file, n)?;
++            }
++            for n in [checksum, size, size] {
++                u32le(&mut file, n)?;
++            }
++            for n in [len, 0, 0, 0, 0] {
++                u16le(&mut file, n)?;
++            }
++            u32le(&mut file, 0)?;
++            u32le(&mut file, offset)?;
++            file.write_all(name.as_bytes()).map_err(|e| e.to_string())?;
++        }
++        let end = u32::try_from(file.stream_position().map_err(|e| e.to_string())?).map_err(|_| "ZIP offset overflow")?;
++        let count = u16::try_from(entries.len()).map_err(|_| "Too many ZIP entries")?;
++        u32le(&mut file, 0x06054b50)?;
++        for n in [0, 0, count, count] {
++            u16le(&mut file, n)?;
++        }
++        u32le(&mut file, end.checked_sub(start).ok_or("ZIP offset overflow")?)?;
++        u32le(&mut file, start)?;
++        u16le(&mut file, 0)?;
++        file.sync_all().map_err(|e| e.to_string())
++    })();
++    if result.is_err() {
++        drop(file);
++        let _ = std::fs::remove_file(output);
++    }
++    result
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn stored_zip_round_trips_through_the_bridge_importer() {
++        let root = std::env::temp_dir().join(format!("ec-zip-write-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        std::fs::create_dir_all(&root).unwrap();
++        let project = root.join("input.ecproj");
++        std::fs::write(&project, b"{\"schema\":2}").unwrap();
++        let media = root.join("input.bin");
++        std::fs::write(&media, [1, 2, 3, 4]).unwrap();
++        let archive = root.join("package.zip");
++        write(&archive, &[("Project.ecproj".into(), project), ("assets/clip.bin".into(), media)]).unwrap();
++        let restored = crate::project_zip::import(&archive, &root, &std::sync::atomic::AtomicBool::new(false)).unwrap();
++        assert_eq!(std::fs::read(restored.parent().unwrap().join("assets/clip.bin")).unwrap(), [1, 2, 3, 4]);
++        assert_eq!(std::fs::read(restored).unwrap(), b"{\"schema\":2}");
++        let _ = std::fs::remove_dir_all(root);
++    }
++}
+diff --git a/apps/effectcraft-ios/src/user_fonts.rs b/apps/effectcraft-ios/src/user_fonts.rs
+new file mode 100644
+index 00000000..69ddcb5e
+--- /dev/null
++++ b/apps/effectcraft-ios/src/user_fonts.rs
+@@ -0,0 +1,129 @@
++//! Persistent, validated user font files shared with the native renderer.
++use effectcraft_engine::text::fonts;
++use std::hash::{Hash, Hasher};
++use std::io::Read;
++use std::path::{Path, PathBuf};
++const MAX_FILE: u64 = 32 << 20;
++const MAX_TOTAL: u64 = 128 << 20;
++
++fn bytes(path: &Path) -> Result<Vec<u8>, String> {
++    let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
++    if !meta.is_file() || meta.len() > MAX_FILE {
++        return Err("Choose a regular font file up to 32 MiB".into());
++    }
++    let mut data = Vec::new();
++    std::fs::File::open(path).map_err(|e| e.to_string())?.take(MAX_FILE + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
++    if data.len() as u64 > MAX_FILE {
++        return Err("Font exceeds 32 MiB".into());
++    }
++    if data.get(..4) == Some(b"ttcf") {
++        let count = u32::from_be_bytes(data.get(8..12).ok_or("Truncated font collection")?.try_into().map_err(|_| "Invalid font collection")?);
++        if count == 0 || count > 64 {
++            return Err("Font collections are limited to 64 faces".into());
++        }
++    }
++    Ok(data)
++}
++fn stored(root: &Path) -> Result<Vec<PathBuf>, String> {
++    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
++    let mut files = Vec::new();
++    let mut total = 0_u64;
++    for entry in std::fs::read_dir(root).map_err(|e| e.to_string())?.take(129) {
++        let entry = entry.map_err(|e| e.to_string())?;
++        let meta = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
++        if !meta.is_file() {
++            continue;
++        }
++        total = total.saturating_add(meta.len());
++        files.push(entry.path());
++    }
++    if files.len() > 128 || total > MAX_TOTAL {
++        return Err("User fonts are limited to 128 files / 128 MiB".into());
++    }
++    files.sort();
++    Ok(files)
++}
++pub fn restore(root: &Path) -> Vec<String> {
++    let files = match stored(root) {
++        Ok(files) => files,
++        Err(e) => return vec![e],
++    };
++    files.into_iter().filter_map(|path| bytes(&path).and_then(fonts::add_font_data_checked).err().map(|e| format!("{}: {e}", path.display()))).collect()
++}
++pub fn import(root: &Path, paths: &[PathBuf]) -> Result<String, String> {
++    if paths.is_empty() || paths.len() > 32 {
++        return Err("Choose 1–32 TTF/OTF font files".into());
++    }
++    let mut files = stored(root)?;
++    let mut total: u64 = files.iter().filter_map(|p| std::fs::metadata(p).ok().map(|m| m.len())).sum();
++    let (mut added, mut duplicate) = (0, 0);
++    let mut errors = Vec::new();
++    for path in paths {
++        let result = (|| {
++            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
++            if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
++                return Err("Choose TTF, OTF, TTC or OTC".to_string());
++            }
++            let data = bytes(path)?;
++            let mut hash = std::collections::hash_map::DefaultHasher::new();
++            data.hash(&mut hash);
++            let target = root.join(format!("font_{:016x}_{}.{ext}", hash.finish(), data.len()));
++            if target.exists() {
++                if bytes(&target)? == data {
++                    duplicate += 1;
++                    return Ok(());
++                }
++                return Err("Font storage name conflict".into());
++            }
++            if files.len() >= 128 || total.saturating_add(data.len() as u64) > MAX_TOTAL {
++                return Err("User fonts are limited to 128 files / 128 MiB".into());
++            }
++            // The parser validates usable name/glyph tables before persistence.
++            fonts::add_font_data_checked(data.clone())?;
++            use effectcraft_engine::Services;
++            effectcraft_engine::FsServices.write_file(&target.to_string_lossy(), &data).map_err(|e| e.to_string())?;
++            total += data.len() as u64;
++            files.push(target);
++            added += 1;
++            Ok(())
++        })();
++        if let Err(e) = result {
++            errors.push(format!("{}: {e}", path.file_name().unwrap_or_default().to_string_lossy()));
++        }
++    }
++    Ok(format!("Fonts added: {added}; already installed: {duplicate}. Select them in Character. {}", errors.join("; ")))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn imported_font_is_registered_persistent_and_deduplicated() {
++        let root = std::env::temp_dir().join(format!("ec-font-persist-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        std::fs::create_dir_all(&root).unwrap();
++        let input = root.join("Source.ttf");
++        let mut data = fonts::INTER_REGULAR.to_vec();
++        for (from, to) in [(b"Inter".as_slice(), b"Probe".as_slice()), (b"\0I\0n\0t\0e\0r".as_slice(), b"\0P\0r\0o\0b\0e".as_slice())] {
++            for at in 0..=data.len().saturating_sub(from.len()) {
++                if let Some(bytes) = data.get_mut(at..at + from.len()) {
++                    if bytes == from {
++                        bytes.copy_from_slice(to);
++                    }
++                }
++            }
++        }
++        std::fs::write(&input, data).unwrap();
++        let installed = root.join("Installed");
++        assert!(import(&installed, &[input.clone()]).unwrap().contains("Fonts added: 1"));
++        assert!(fonts::all_faces().iter().any(|f| f.info.family.contains("Probe")));
++        assert_eq!(stored(&installed).unwrap().len(), 1);
++        assert!(import(&installed, &[input]).unwrap().contains("already installed: 1"));
++        assert!(restore(&installed).is_empty());
++        let bad = root.join("Bad.otf");
++        std::fs::write(&bad, b"not a font").unwrap();
++        assert!(import(&installed, &[bad]).unwrap().contains("Invalid"));
++        assert_eq!(stored(&installed).unwrap().len(), 1);
++        let _ = std::fs::remove_dir_all(root);
 +    }
 +}
 diff --git a/apps/effectcraft-web/Cargo.toml b/apps/effectcraft-web/Cargo.toml
@@ -4494,7 +5240,7 @@ index ae2294f1..7436fbe0 100644
                                  let pts: Vec<egui::Pos2> =
                                      poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
-index 163e6507..3d875706 100644
+index 163e6507..4c406941 100644
 --- a/crates/ui-egui/src/panels/timeline.rs
 +++ b/crates/ui-egui/src/panels/timeline.rs
 @@ -72,7 +72,7 @@ pub(crate) fn bar_color(label: Color32, selected: bool) -> Color32 {
@@ -4506,25 +5252,26 @@ index 163e6507..3d875706 100644
  
  /// A layer bar's body (drag to move) and its In/Out trim zones. Short bars keep their middle
  /// third as body; a bar too short for that is all trim zones (the Out one on top).
-@@ -2301,6 +2301,17 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -2301,6 +2301,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                      let body = ui.interact(body_r, egui::Id::new(("bar", layer.id.0)), Sense::click_and_drag());
                      let lin = ui.interact(in_r, egui::Id::new(("bar-in", layer.id.0)), Sense::drag());
                      let lout = ui.interact(out_r, egui::Id::new(("bar-out", layer.id.0)), Sense::drag());
 +                    // Visual trim hints. The interactive edge remains 14 px wide.
 +                    let trim_top = bar.min.y + 4.0;
 +                    let trim_bottom = bar.max.y - 4.0;
-+                    if lin.hovered() || lin.dragged() {
++                    let over_bar = ui.rect_contains_pointer(bar.expand2(vec2(TRIM_OUTSIDE, 0.0)));
++                    if over_bar || lin.hovered() || lin.dragged() {
 +                        let x = bar.min.x + 2.0;
 +                        gp.line_segment([pos2(x, trim_top), pos2(x, trim_bottom)], Stroke::new(2.0, Color32::WHITE));
 +                    }
-+                    if lout.hovered() || lout.dragged() {
++                    if over_bar || lout.hovered() || lout.dragged() {
 +                        let x = bar.max.x - 2.0;
 +                        gp.line_segment([pos2(x, trim_top), pos2(x, trim_bottom)], Stroke::new(2.0, Color32::WHITE));
 +                    }
                      app.auto.add(&format!("timeline.layer.{}.bar.in", layer.id.0), in_r, "Trim In");
                      app.auto.add(&format!("timeline.layer.{}.bar.out", layer.id.0), out_r, "Trim Out");
                      if lin.hovered() || lout.hovered() || lin.dragged() || lout.dragged() {
-@@ -2746,8 +2757,46 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -2746,8 +2758,46 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                  let is_tr_rot = layer.transform().and_then(|t| t.get("rotation")).is_some_and(|r| r.uid == prop.uid);
                  let base = if is_tr_rot && prop.name == "Rotation" && layer.is_3d() { "Z Rotation".to_string() } else { prop.name.clone() };
                  let pname = if prop.has_expression() { format!("{base}  =") } else { base };
@@ -4573,7 +5320,7 @@ index 163e6507..3d875706 100644
                  let name_resp = ui.interact(name_rect, egui::Id::new(("pname", uid)), Sense::click_and_drag());
                  app.auto.add(&format!("timeline.prop.{uid}.name"), name_rect, &prop.name);
                  if name_resp.drag_started() {
-@@ -2985,6 +3034,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -2985,6 +3035,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
      }
      if outline_empty.clicked() && !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
          actions.push(("layer.select".into(), json!({"layers": []})));

@@ -39,7 +39,7 @@ class PackagingTests(unittest.TestCase):
             prefix = "Payload/EffectCraftNative.app/"
             info = plistlib.loads(archive.read(prefix + "Info.plist"))
             self.assertEqual(info["CFBundleIdentifier"], "com.effectcraft.ipad.nativepreview")
-            self.assertEqual(info["CFBundleVersion"], "10")
+            self.assertEqual(info["CFBundleVersion"], "11")
             self.assertEqual(info["UIDeviceFamily"], [2])
             self.assertTrue(info["UIStatusBarHidden"])
             declarations = {entry["UTTypeIdentifier"]: entry for entry in info["UTExportedTypeDeclarations"]}

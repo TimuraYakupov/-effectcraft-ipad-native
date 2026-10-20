@@ -23,7 +23,7 @@ static NSMutableSet<NSNumber *> *ECKDown;
 static NSURL *ECKDirectory(void) {
     const char *home = getenv("HOME");
     NSString *path = home ? [NSString stringWithUTF8String:home] : nil;
-    return path ? [NSURL fileURLWithPath:[path stringByAppendingPathComponent:@"Library/Caches/EffectCraft/Keyboard10"] isDirectory:YES] : nil;
+    return path ? [NSURL fileURLWithPath:[path stringByAppendingPathComponent:@"Library/Caches/EffectCraft/Keyboard11"] isDirectory:YES] : nil;
 }
 static BOOL ECKKnown(NSInteger code) {
     return (code >= 4 && code <= 56) || (code >= 58 && code <= 69) || (code >= 73 && code <= 82) ||
@@ -188,10 +188,60 @@ static UIViewController *ECKFind(void) {
 #pragma clang diagnostic pop
     return nil;
 }
+@interface ECPointer : NSObject <UIGestureRecognizerDelegate>
+@property(nonatomic,weak) UIView *view;
+@property(nonatomic,strong) UIHoverGestureRecognizer *hover;
+@property(nonatomic,strong) UITapGestureRecognizer *secondary;
+@end
+static ECPointer *ECKMouse;
+@implementation ECPointer
+- (BOOL)active {
+    return ECKSession && self.view.window.isKeyWindow && !ECKGuest.presentedViewController &&
+        UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+}
+- (void)hovering:(UIHoverGestureRecognizer *)gesture {
+    if (![self active]) return;
+    if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled) {
+        ECKWrite(@{@"kind":@"pointer",@"phase":@"gone"}); return;
+    }
+    if (gesture.state != UIGestureRecognizerStateBegan && gesture.state != UIGestureRecognizerStateChanged) return;
+    CGPoint point = [gesture locationInView:self.view];
+    ECKWrite(@{@"kind":@"pointer",@"x":@(point.x),@"y":@(point.y)});
+}
+- (void)rightClick:(UITapGestureRecognizer *)gesture {
+    if (![self active] || gesture.state != UIGestureRecognizerStateRecognized) return;
+    CGPoint point = [gesture locationInView:self.view];
+    ECKWrite(@{@"kind":@"pointer",@"x":@(point.x),@"y":@(point.y),@"down":@YES});
+    ECKWrite(@{@"kind":@"pointer",@"x":@(point.x),@"y":@(point.y),@"down":@NO});
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b {
+    return [a isKindOfClass:UIHoverGestureRecognizer.class] || [b isKindOfClass:UIHoverGestureRecognizer.class];
+}
+@end
+static void ECKInstallPointer(UIView *view) {
+    if (!view || ECKMouse.view == view) return;
+    if (!ECKMouse) ECKMouse = [ECPointer new];
+    if (ECKMouse.hover) [ECKMouse.view removeGestureRecognizer:ECKMouse.hover];
+    if (ECKMouse.secondary) [ECKMouse.view removeGestureRecognizer:ECKMouse.secondary];
+    ECKMouse.view = view;
+    UIHoverGestureRecognizer *hover = [[UIHoverGestureRecognizer alloc] initWithTarget:ECKMouse action:@selector(hovering:)];
+    hover.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
+    hover.cancelsTouchesInView = NO;
+    hover.delegate = ECKMouse;
+    [view addGestureRecognizer:hover]; ECKMouse.hover = hover;
+    UITapGestureRecognizer *secondary = [[UITapGestureRecognizer alloc] initWithTarget:ECKMouse action:@selector(rightClick:)];
+    secondary.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
+    secondary.buttonMaskRequired = UIEventButtonMaskSecondary;
+    secondary.delaysTouchesBegan = YES;
+    secondary.cancelsTouchesInView = YES;
+    secondary.delegate = ECKMouse;
+    [view addGestureRecognizer:secondary]; ECKMouse.secondary = secondary;
+}
 static void ECKActivate(void) {
     ECKInstall();
     UIViewController *controller = ECKFind();
     ECKGuest = controller;
+    ECKInstallPointer(controller.view);
     UIWindow *window = controller.view.window;
     BOOL active = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
     BOOL modal = controller.presentedViewController != nil;
