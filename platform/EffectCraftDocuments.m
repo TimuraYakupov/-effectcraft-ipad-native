@@ -51,6 +51,7 @@ static void ECSaveBookmarks(void) {
             else NSLog(@"EffectCraft: cannot persist access for %@: %@", url.lastPathComponent, error.localizedDescription);
         }
     }
+    if (records.count > 128) [records removeObjectsInRange:NSMakeRange(0, records.count - 128)];
     NSURL *file = ECBookmarks();
     [NSFileManager.defaultManager createDirectoryAtURL:file.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
     NSData *data = [NSPropertyListSerialization dataWithPropertyList:records format:NSPropertyListBinaryFormat_v1_0 options:0 error:nil];
@@ -63,6 +64,7 @@ static void ECRestoreBookmarks(void) {
     NSData *data = [NSData dataWithContentsOfURL:file];
     id records = data ? [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil] : nil;
     if (![records isKindOfClass:NSArray.class] || [records count] > 256) return;
+    if ([records count] > 128) records = [records subarrayWithRange:NSMakeRange([records count] - 128, 128)];
     for (id record in records) {
         if (![record isKindOfClass:NSDictionary.class]) continue;
         NSString *path = record[@"path"]; NSData *bookmark = record[@"bookmark"];

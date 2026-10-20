@@ -26,7 +26,7 @@ It is not an App Store or TestFlight distribution.
 - Automatic recovery copies in Documents/Recovery, every minute by default and on focus loss.
   The next launch offers the latest auto-save after an unclean exit.
 - Bookmarks restore external folder/save access on relaunch. If a provider revokes
-  access, choose that location again in Files. Opening projects imports a persistent
+  access, choose that location again in Files. The last 128 external locations are retained. Opening projects imports a persistent
   local copy; it does not use the unreliable LiveContainer open-in-place handoff.
 
 ## Render Queue
