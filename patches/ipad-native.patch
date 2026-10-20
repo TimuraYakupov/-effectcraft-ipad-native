@@ -33,7 +33,7 @@ index ce8fe123..a889d7cb 100644
   "egui",
 diff --git a/apps/effectcraft-ios/Cargo.toml b/apps/effectcraft-ios/Cargo.toml
 new file mode 100644
-index 00000000..b44ad8d1
+index 00000000..4ff96ccc
 --- /dev/null
 +++ b/apps/effectcraft-ios/Cargo.toml
 @@ -0,0 +1,22 @@
@@ -58,7 +58,7 @@ index 00000000..b44ad8d1
 +winit = { version = "0.30", default-features = false }
 +
 +[dev-dependencies]
-+egui_kittest = { workspace = true, features = ["wgpu"] }
++egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 diff --git a/apps/effectcraft-ios/src/bridge.rs b/apps/effectcraft-ios/src/bridge.rs
 new file mode 100644
 index 00000000..5728466c
