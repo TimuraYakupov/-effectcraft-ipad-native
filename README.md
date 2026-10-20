@@ -1,13 +1,13 @@
-# EffectCraft for iPad — build 15
+# EffectCraft for iPad — build 16
 
-A native ARM64 iPad editor built from EffectCraft 0.10.0, pinned at
-`05955c08b4fd025f1a09882df72e6dbff1a8148a`. Rust/egui runs over Metal without a
+A native ARM64 iPad editor built from EffectCraft 0.11.1, pinned at
+`2a01226894c6bc58ae4fadcc24a10198d693acaa`. Rust/egui runs over Metal without a
 WebView. Builds run on GitHub Actions macOS runners; a local Mac is not required.
 
 ## Build and install
 
 Open Actions → Native iPad preview → the latest successful run. Download the
-EffectCraft-Native-Preview artifact and extract `EffectCraft-0.10.0-iPad-Build-15.ipa`.
+EffectCraft-Native-Preview artifact and extract `EffectCraft-0.11.1-iPad-Build-16.ipa`.
 This is an unsigned device build for the existing LiveContainer installation
 workflow. Keep the same app/container identity to retain projects and settings.
 It is not an App Store or TestFlight distribution.
@@ -64,3 +64,14 @@ CI first reproduces both failed drops with the previous hover-only targets,
 then runs the fixed frontend tests. Tests cover one editable, undoable layer
 per drop, ordinary mouse input, native touch release, dropping outside and
 cancellation. Physical iPad/LiveContainer validation remains necessary.
+
+## Update to 0.11.1
+
+Build 16 rebases the iPad frontend onto the upstream v0.11.1 release, not just
+the package label. The native Files/AE ZIP bridge, custom fonts, keyboard and
+mouse routing, touch-release media drop fix, 2 GiB RAM preview, disk cache,
+audio, autosave/recovery, bookmarks and licensed app icon are retained.
+The existing bundle ID and v13 one-time cache migration marker are preserved.
+
+The upstream Copy Source Path media command and the native diagnostics/AE
+commands all retain their menu dispatch. No UIKit touch interception is added.

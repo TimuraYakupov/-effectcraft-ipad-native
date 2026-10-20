@@ -1,14 +1,14 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index ce8fe123..049aa3fc 100644
+index 933e3295..8ac17577 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -1387,6 +1387,21 @@ dependencies = [
+@@ -1408,6 +1408,21 @@ dependencies = [
   "thiserror 2.0.21",
  ]
  
 +[[package]]
 +name = "effectcraft-ios"
-+version = "0.10.0"
++version = "0.11.1"
 +dependencies = [
 + "cpal",
 + "effectcraft-engine",
@@ -23,8 +23,8 @@ index ce8fe123..049aa3fc 100644
 +
  [[package]]
  name = "effectcraft-keyframe"
- version = "0.10.0"
-@@ -1667,6 +1682,7 @@ dependencies = [
+ version = "0.11.1"
+@@ -1693,6 +1708,7 @@ dependencies = [
   "effectcraft-gpu",
   "effectcraft-host",
   "effectcraft-media",
@@ -65,10 +65,10 @@ index 00000000..81598ef0
 +egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 diff --git a/apps/effectcraft-ios/src/bridge.rs b/apps/effectcraft-ios/src/bridge.rs
 new file mode 100644
-index 00000000..5728466c
+index 00000000..7c34dae3
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/bridge.rs
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,318 @@
 +//! Native implementation of the same File-menu Bridge commands as the web host.
 +use crate::native_documents::NativeDocuments;
 +use effectcraft_ui_egui::{
@@ -321,6 +321,11 @@ index 00000000..5728466c
 +            app
 +        });
 +        h.run_steps(4);
++        // 0.11.1's new frontend command must coexist with our native File hooks.
++        let ctx = h.ctx.clone();
++        let copied = effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "mediaBrowser.copySourcePath", json!({"path":"/Synthetic/clip.mp4"})).unwrap();
++        assert_eq!(copied["path"], "/Synthetic/clip.mp4");
++        assert!(ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "/Synthetic/clip.mp4"))));
 +        let bar = h.state().auto.find(&format!("timeline.layer.{layer}.bar")).unwrap().rect;
 +        let center = pos2(bar[0] + bar[2] / 2.0, bar[1] + bar[3] / 2.0);
 +        h.event(Event::PointerMoved(center));
@@ -384,7 +389,7 @@ index 00000000..5728466c
 +}
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..a64b3b0c
+index 00000000..3e06e384
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
 @@ -0,0 +1,236 @@
@@ -473,7 +478,7 @@ index 00000000..a64b3b0c
 +        if self.open {
 +            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +            let mut open = self.open;
-+            egui::Window::new("Diagnostics · build 15").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("Diagnostics · build 16").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
 +                ui.label(&self.keyboard.native_status);
 +                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
@@ -1912,7 +1917,7 @@ index 00000000..9441c9b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..af0b327e
+index 00000000..e1c16831
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
 @@ -0,0 +1,118 @@
@@ -1946,7 +1951,7 @@ index 00000000..af0b327e
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=15 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
++    log::info!(target: "effectcraft_diagnostics", "build=16 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1986,7 +1991,7 @@ index 00000000..af0b327e
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => format!("EffectCraft · build 15. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
++                Ok(_) => format!("EffectCraft · build 16. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -4408,10 +4413,10 @@ index 70ab93ff..19edc8a4 100644
          let bytes;
          if (typeof fileOrUrl === "string") {
 diff --git a/crates/engine/src/commands/edit.rs b/crates/engine/src/commands/edit.rs
-index 06ba43b1..27b5e57c 100644
+index 422728ea..79b0c1cb 100644
 --- a/crates/engine/src/commands/edit.rs
 +++ b/crates/engine/src/commands/edit.rs
-@@ -790,6 +790,7 @@ pub(crate) fn disk_stats(s: &mut Session, _: &Value) -> Result<Value> {
+@@ -791,6 +791,7 @@ pub(crate) fn disk_stats(s: &mut Session, _: &Value) -> Result<Value> {
          "misses": st.misses,
          "writes": st.writes,
          "evictions": st.evictions,
@@ -4420,10 +4425,10 @@ index 06ba43b1..27b5e57c 100644
  }
  
 diff --git a/crates/engine/src/commands/layer.rs b/crates/engine/src/commands/layer.rs
-index ca8aa865..8ab829df 100644
+index b798493b..5e8fc24a 100644
 --- a/crates/engine/src/commands/layer.rs
 +++ b/crates/engine/src/commands/layer.rs
-@@ -927,10 +927,40 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
+@@ -929,10 +929,40 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
      // Relative trims: each layer moves its own in/out point by the same amount, so dragging an
      // edge of several selected layers trims them all together (as in AE).
      let (in_delta, out_delta) = (snap("inDelta"), snap("outDelta"));
@@ -4464,7 +4469,7 @@ index ca8aa865..8ab829df 100644
          for l in comp.layers.iter_mut().filter(|l| ids.contains(&l.id)) {
              let shift = |l: &mut Layer, d: Tick| {
                  l.start_time += d;
-@@ -954,8 +984,22 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
+@@ -956,8 +986,22 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
                      let d = comp_dur - l.out_point;
                      shift(l, d);
                  }
@@ -4489,7 +4494,7 @@ index ca8aa865..8ab829df 100644
                  _ => {
                      if let Some(d) = delta {
                          shift(l, d);
-@@ -965,18 +1009,34 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
+@@ -967,18 +1011,34 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
                          shift(l, d);
                      }
                      if let Some(i) = inp {
@@ -4544,7 +4549,7 @@ index 2c89466a..c4f55179 100644
  }
  
 diff --git a/crates/engine/src/session_settings.rs b/crates/engine/src/session_settings.rs
-index 55c8e415..39cd42e5 100644
+index ef3e748a..cb75223f 100644
 --- a/crates/engine/src/session_settings.rs
 +++ b/crates/engine/src/session_settings.rs
 @@ -131,7 +131,9 @@ impl Session {
@@ -4559,7 +4564,7 @@ index 55c8e415..39cd42e5 100644
          // disk cache off drops it).
          let store: std::sync::Arc<dyn effectcraft_effects::roto::SegStore> = dc.clone();
 diff --git a/crates/media/src/pool.rs b/crates/media/src/pool.rs
-index 98c70710..13b35eb0 100644
+index 9a8ec5c2..8ca145d1 100644
 --- a/crates/media/src/pool.rs
 +++ b/crates/media/src/pool.rs
 @@ -45,6 +45,8 @@ struct Key {
@@ -5383,7 +5388,7 @@ index 105a075e..ed423031 100644
              }
              pending = true;
 diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
-index 8b5fd1c3..3077c325 100644
+index 26a7b66f..81924376 100644
 --- a/crates/ui-egui/src/menus.rs
 +++ b/crates/ui-egui/src/menus.rs
 @@ -12,6 +12,70 @@ use crate::dock::PanelKind;
@@ -5493,10 +5498,10 @@ index 8b5fd1c3..3077c325 100644
 +        ctx.request_repaint();
 +        return Ok(Value::Null);
 +    }
-     if id == "effects.copyPresetsFolderPath" {
+     if matches!(id, "effects.copyPresetsFolderPath" | "mediaBrowser.copySourcePath") {
          return frontend(app, ctx, id, params);
      }
-@@ -1554,6 +1642,10 @@ pub(crate) fn entry_checked(app: &EffectcraftApp, e: &MenuEntry) -> Option<bool>
+@@ -1572,6 +1660,10 @@ pub(crate) fn entry_checked(app: &EffectcraftApp, e: &MenuEntry) -> Option<bool>
  }
  
  pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
@@ -5507,7 +5512,7 @@ index 8b5fd1c3..3077c325 100644
      if app.ui.focused == PanelKind::Project {
          match e.command.as_str() {
              "edit.duplicate" => {
-@@ -1582,7 +1674,7 @@ pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
+@@ -1600,7 +1692,7 @@ pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
  
  /// Every menu entry, flattened with its submenu path.
  pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
@@ -5516,7 +5521,7 @@ index 8b5fd1c3..3077c325 100644
          .into_iter()
          .map(|(path, e)| MenuItem {
              id: e.command.clone(),
-@@ -1592,8 +1684,22 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
+@@ -1610,8 +1702,22 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
              enabled: entry_enabled(app, e),
              checked: entry_checked(app, e),
              params: e.params.clone(),
@@ -5541,7 +5546,7 @@ index 8b5fd1c3..3077c325 100644
  }
  
  /// Shortcut text in this OS's notation (`⇧⌘K` on macOS, `Ctrl+Shift+K` elsewhere).
-@@ -1981,7 +2087,10 @@ pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
+@@ -1999,7 +2105,10 @@ pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
                  if let MenuNode::Submenu { label, children } = node {
                      let r = ui.menu_button(crate::i18n::label(app, "", label), |ui| {
                          ui.set_min_width(if label == "Effect" { 200.0 } else { 280.0 });
@@ -5553,7 +5558,7 @@ index 8b5fd1c3..3077c325 100644
                      });
                      nav.top(&r.response);
                      app.auto.add(&format!("menu.{label}"), r.response.rect, label);
-@@ -2004,7 +2113,8 @@ pub(crate) fn menu_contents(app: &mut EffectcraftApp, ui: &mut egui::Ui, name: &
+@@ -2022,7 +2131,8 @@ pub(crate) fn menu_contents(app: &mut EffectcraftApp, ui: &mut egui::Ui, name: &
      if let Some(MenuNode::Submenu { children, .. }) =
          effectcraft_engine::menus::menu_bar().iter().find(|n| matches!(n, MenuNode::Submenu { label, .. } if label == name))
      {
@@ -5563,7 +5568,7 @@ index 8b5fd1c3..3077c325 100644
      }
      clicked.map(|(id, params)| (id, if params.is_null() { json!({}) } else { params }))
  }
-@@ -2104,7 +2214,7 @@ pub(crate) fn submenu_at(app: &mut EffectcraftApp, ui: &mut egui::Ui, path: &[&s
+@@ -2122,7 +2232,7 @@ pub(crate) fn submenu_at(app: &mut EffectcraftApp, ui: &mut egui::Ui, path: &[&s
  }
  
  /// The menu bar's entry for `command` in a panel's context menu (see [`submenu_at`]).
@@ -5572,7 +5577,7 @@ index 8b5fd1c3..3077c325 100644
      if let Some((_, e)) = effectcraft_engine::menus::entries().into_iter().find(|(_, e)| e.command == command)
          && menu_entry(app, ui, e).clicked()
      {
-@@ -2124,7 +2234,7 @@ fn gutter(checked: bool) -> egui::Atom<'static> {
+@@ -2142,7 +2252,7 @@ fn gutter(checked: bool) -> egui::Atom<'static> {
      (if checked { "✔" } else { "" }).atom_size(egui::vec2(14.0, 14.0))
  }
  
@@ -5581,7 +5586,7 @@ index 8b5fd1c3..3077c325 100644
      let (label, check, enabled) = (entry_label(app, e), gutter(entry_checked(app, e) == Some(true)), entry_enabled(app, e));
      // Edit ▸ Label's entries show the label's colour before its name.
      if e.command == "edit.label"
-@@ -2132,13 +2242,16 @@ fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::R
+@@ -2150,13 +2260,16 @@ fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::R
      {
          let out = ui.add_enabled_ui(enabled, |ui| egui::Button::new((check, crate::widgets::label_swatch(), label)).atom_ui(ui)).inner;
          crate::widgets::paint_label_swatch(ui, &out, l, &app.tokens);
@@ -5599,7 +5604,7 @@ index 8b5fd1c3..3077c325 100644
  }
  
  /// View ▸ Zoom In / Zoom Out: the next standard magnification (as a share of screen pixels, so
-@@ -2194,6 +2307,53 @@ mod tests {
+@@ -2212,6 +2325,53 @@ mod tests {
          assert_eq!(starts, vec![Some(egui::Modifiers::SHIFT), Some(egui::Modifiers::SHIFT)]);
      }
  
@@ -5758,7 +5763,7 @@ index ae2294f1..7436fbe0 100644
                                  let pts: Vec<egui::Pos2> =
                                      poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
-index 163e6507..9720a102 100644
+index aff4ef2c..177c826d 100644
 --- a/crates/ui-egui/src/panels/timeline.rs
 +++ b/crates/ui-egui/src/panels/timeline.rs
 @@ -72,7 +72,7 @@ pub(crate) fn bar_color(label: Color32, selected: bool) -> Color32 {
@@ -5770,7 +5775,7 @@ index 163e6507..9720a102 100644
  
  /// A layer bar's body (drag to move) and its In/Out trim zones. Short bars keep their middle
  /// third as body; a bar too short for that is all trim zones (the Out one on top).
-@@ -2301,6 +2301,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -2308,6 +2308,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                      let body = ui.interact(body_r, egui::Id::new(("bar", layer.id.0)), Sense::click_and_drag());
                      let lin = ui.interact(in_r, egui::Id::new(("bar-in", layer.id.0)), Sense::drag());
                      let lout = ui.interact(out_r, egui::Id::new(("bar-out", layer.id.0)), Sense::drag());
@@ -5789,7 +5794,7 @@ index 163e6507..9720a102 100644
                      app.auto.add(&format!("timeline.layer.{}.bar.in", layer.id.0), in_r, "Trim In");
                      app.auto.add(&format!("timeline.layer.{}.bar.out", layer.id.0), out_r, "Trim Out");
                      if lin.hovered() || lout.hovered() || lin.dragged() || lout.dragged() {
-@@ -2746,8 +2758,46 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -2763,8 +2775,46 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                  let is_tr_rot = layer.transform().and_then(|t| t.get("rotation")).is_some_and(|r| r.uid == prop.uid);
                  let base = if is_tr_rot && prop.name == "Rotation" && layer.is_3d() { "Z Rotation".to_string() } else { prop.name.clone() };
                  let pname = if prop.has_expression() { format!("{base}  =") } else { base };
@@ -5838,7 +5843,7 @@ index 163e6507..9720a102 100644
                  let name_resp = ui.interact(name_rect, egui::Id::new(("pname", uid)), Sense::click_and_drag());
                  app.auto.add(&format!("timeline.prop.{uid}.name"), name_rect, &prop.name);
                  if name_resp.drag_started() {
-@@ -2985,6 +3035,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -3002,6 +3052,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
      }
      if outline_empty.clicked() && !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
          actions.push(("layer.select".into(), json!({"layers": []})));
@@ -5846,7 +5851,7 @@ index 163e6507..9720a102 100644
      }
      if let (Some(start), Some(end)) = (ctx.input(|i| i.pointer.press_origin()), outline_empty.interact_pointer_pos())
          && outline_empty.dragged()
-@@ -3324,9 +3375,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -3341,9 +3392,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
      // comps from the Project panel and files from the Media Browser go where they are dropped: a
      // line shows the place in the stack, and over the time graph a marker shows the In point too
      // (Shift: at the current time).
@@ -5875,10 +5880,10 @@ index 2d42eb2c..c2a82b78 100644
      let at = map.to_comp(ptr);
      let actions: Vec<(&str, Value)> = match payload.as_ref() {
 diff --git a/xtask/src/main.rs b/xtask/src/main.rs
-index 4d541feb..c8af9c02 100644
+index e79ac63a..1b391799 100644
 --- a/xtask/src/main.rs
 +++ b/xtask/src/main.rs
-@@ -60,6 +60,7 @@ const LAYERS: &[(&str, u8)] = &[
+@@ -61,6 +61,7 @@ const LAYERS: &[(&str, u8)] = &[
      ("effectcraft", 6),
      ("cli", 6),
      ("web", 6),
