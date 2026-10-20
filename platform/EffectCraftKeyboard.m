@@ -19,6 +19,13 @@ static BOOL ECKText;
 static BOOL ECKBlocked;
 static unsigned long long ECKSequence;
 static NSMutableSet<NSNumber *> *ECKDown;
+static __weak UITouch *ECKPrimaryTouch;
+static BOOL ECKPrimaryDown;
+static CGPoint ECKPrimaryPoint;
+typedef void (*ECKTouchIMP)(id, SEL, NSSet<UITouch *> *, UIEvent *);
+static ECKTouchIMP ECKTouchOriginal[4];
+static BOOL ECKTouchInstalled;
+static void ECKCancelPrimary(void);
 
 static NSURL *ECKDirectory(void) {
     const char *home = getenv("HOME");
@@ -62,6 +69,7 @@ static UIKeyModifierFlags ECKFlags(UIKey *key, BOOL down) {
     return down ? flags | flag : flags & ~flag;
 }
 static void ECKReset(void) {
+    ECKCancelPrimary();
     if (ECKSession) ECKWrite(@{@"kind":@"reset"});
     [ECKDown removeAllObjects];
 }
@@ -135,7 +143,76 @@ static void ECKPress(id responder, SEL selector, NSSet<UIPress *> *presses, UIPr
     }
 }
 static BOOL ECKCanFocus(id responder, SEL selector) { (void)responder; (void)selector; return YES; }
+// Own only physical mouse primary touches. Winit otherwise represents them as
+// touchscreen input; hover and UIKit cancellation can then break egui's drag owner.
+// Finger, Pencil, secondary buttons and system modals keep their original routing.
+static void ECKCancelPrimary(void) {
+    if (!ECKPrimaryDown) return;
+    ECKWrite(@{@"kind":@"pointer", @"button":@"primary", @"phase":@"cancel", @"down":@NO,
+        @"x":@(ECKPrimaryPoint.x), @"y":@(ECKPrimaryPoint.y)});
+    ECKPrimaryDown = NO; ECKPrimaryTouch = nil;
+}
+static SEL ECKTouchSelector(NSUInteger phase) {
+    switch (phase) {
+        case 0: return @selector(touchesBegan:withEvent:);
+        case 1: return @selector(touchesMoved:withEvent:);
+        case 2: return @selector(touchesEnded:withEvent:);
+        default: return @selector(touchesCancelled:withEvent:);
+    }
+}
+static BOOL ECKHandleTouch(UIView *view, UITouch *touch, UIEvent *event, NSUInteger phase) {
+    if (touch.type != UITouchTypeIndirectPointer) return NO;
+    if (!ECKSession || !view.window.isKeyWindow || ECKGuest.presentedViewController ||
+        UIApplication.sharedApplication.applicationState != UIApplicationStateActive) {
+        if (touch == ECKPrimaryTouch) { ECKCancelPrimary(); return YES; }
+        return NO;
+    }
+    if (phase == 0) {
+        if ((event.buttonMask & UIEventButtonMaskSecondary) || !(event.buttonMask & UIEventButtonMaskPrimary)) return NO;
+        if (ECKPrimaryDown) ECKCancelPrimary();
+        ECKPrimaryDown = YES; ECKPrimaryTouch = touch;
+    } else if (!ECKPrimaryDown || touch != ECKPrimaryTouch) { return NO; }
+    CGPoint point = [touch locationInView:view];
+    ECKPrimaryPoint = point;
+    if (phase == 3) { ECKCancelPrimary(); return YES; }
+    NSMutableDictionary *record = [@{@"kind":@"pointer", @"button":@"primary", @"x":@(point.x), @"y":@(point.y)} mutableCopy];
+    if (phase == 0 || phase == 2) record[@"down"] = @(phase == 0);
+    ECKWrite(record);
+    if (phase == 2) { ECKPrimaryDown = NO; ECKPrimaryTouch = nil; }
+    return YES;
+}
+static void ECKTouches(id responder, SEL selector, NSSet<UITouch *> *touches, UIEvent *event) {
+    NSUInteger phase = 4;
+    for (NSUInteger i = 0; i < 4; i++) if (selector == ECKTouchSelector(i)) { phase = i; break; }
+    if (phase >= 4) return;
+    if (touches.count > 32) {
+        ECKCancelPrimary();
+        if (ECKTouchOriginal[phase]) ECKTouchOriginal[phase](responder, selector, touches, event);
+        return;
+    }
+    NSMutableSet<UITouch *> *forward = [NSMutableSet new];
+    for (UITouch *touch in touches) if (!ECKHandleTouch(responder, touch, event, phase)) [forward addObject:touch];
+    if (forward.count && ECKTouchOriginal[phase]) ECKTouchOriginal[phase](responder, selector, forward, event);
+}
+static void ECKInstallTouches(void) {
+    if (ECKTouchInstalled) return;
+    Class cls = NSClassFromString(@"WinitUIView");
+    if (!cls) return;
+    BOOL installed = YES;
+    for (NSUInteger phase = 0; phase < 4; phase++) {
+        SEL selector = ECKTouchSelector(phase);
+        Method method = class_getInstanceMethod(cls, selector);
+        if (!method) { installed = NO; continue; }
+        if (method_getImplementation(method) == (IMP)ECKTouches) continue;
+        ECKTouchIMP original = (ECKTouchIMP)method_getImplementation(method);
+        // The Winit view itself implements touches methods: replace only this class.
+        if (class_addMethod(cls, selector, (IMP)ECKTouches, method_getTypeEncoding(method))) ECKTouchOriginal[phase] = original;
+        else ECKTouchOriginal[phase] = (ECKTouchIMP)method_setImplementation(class_getInstanceMethod(cls, selector), (IMP)ECKTouches);
+    }
+    ECKTouchInstalled = installed;
+}
 static void ECKInstall(void) {
+    ECKInstallTouches();
     for (NSUInteger type = 0; type < 2; type++) {
         Class cls = NSClassFromString(type ? @"WinitUIViewController" : @"WinitUIView");
         if (!cls || ECKInstalled[type]) continue;
@@ -200,7 +277,7 @@ static ECPointer *ECKMouse;
         UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
 }
 - (void)hovering:(UIHoverGestureRecognizer *)gesture {
-    if (![self active]) return;
+    if (![self active] || ECKPrimaryDown) return;
     if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled) {
         ECKWrite(@{@"kind":@"pointer",@"phase":@"gone"}); return;
     }
@@ -310,3 +387,4 @@ __attribute__((constructor,used)) static void ECInstallKeyboard(void) {
         [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) { (void)note; ECKReset(); }];
     }
 }
+

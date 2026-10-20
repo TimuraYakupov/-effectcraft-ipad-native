@@ -219,3 +219,14 @@ bundle, not a production release or an upstream pull request.
 - Security-scoped external folder/save grants are bookmarked and restored before the document bridge becomes ready. Revoked provider access still requires choosing the folder again.
 - Render Queue defaults to Documents/Renders. Select a completed item and choose Save to Files. Movies/audio export as files; primary image sequences export as ZIP (up to 4096 frames / 512 MiB). Additional output modules remain in their specified output folders.
 - Physical iPad audio routes, background suspension, provider relaunch and playback require device validation; compilation does not establish those behaviors.
+
+
+
+## EffectCraft iPad build 13
+
+- RAM preview hard ceiling and initial budget: 2 GiB, with a one-time migration from build 12; later manual settings remain persistent. GPU cache remains bounded separately.
+- Diagnostics lives in Help → Diagnostics, without an overlay on the editor.
+- Bundle display name and window title: EffectCraft; bundle ID is preserved for updates.
+- Primary mouse down/move/up/cancel uses one UIKit-to-egui pointer stream; winit does not also receive captured indirect-pointer touches. Hover exit cannot cancel a held primary drag. Finger, Pencil, secondary buttons and system modals keep their routing.
+- Simulator exercises production pointer hooks. Frontend tests import a synthetic WAV, drag it across panels and check that exactly one editable footage layer appears in either Composition or Timeline.
+- Validate a physical mouse/trackpad on iPad; simulator test doubles cannot establish hardware delivery inside LiveContainer.

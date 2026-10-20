@@ -5,6 +5,7 @@ static UIWindow *TestWindow;
 static NSURL *TestRoot;
 static NSString *TestSession;
 static NSMutableArray<NSString *> *Checks;
+static NSUInteger ForwardedTouches;
 
 @interface WinitUIView : UIView <UIKeyInput>
 @end
@@ -13,6 +14,10 @@ static NSMutableArray<NSString *> *Checks;
 - (BOOL)hasText { return YES; }
 - (void)insertText:(NSString *)text { (void)text; }
 - (void)deleteBackward {}
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)event; ForwardedTouches += touches.count; }
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)event; ForwardedTouches += touches.count; }
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)event; ForwardedTouches += touches.count; }
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)event; ForwardedTouches += touches.count; }
 @end
 @interface WinitUIViewController : UIViewController
 @end
@@ -42,6 +47,20 @@ static NSMutableArray<NSString *> *Checks;
 @end
 @implementation TestPointer
 - (CGPoint)locationInView:(UIView *)view { (void)view; return self.point; }
+@end
+
+@interface TestTouch : NSObject
+@property(nonatomic) UITouchType type;
+@property(nonatomic) CGPoint point;
+- (CGPoint)locationInView:(UIView *)view;
+@end
+@implementation TestTouch
+- (CGPoint)locationInView:(UIView *)view { (void)view; return self.point; }
+@end
+@interface TestMouseEvent : NSObject
+@property(nonatomic) UIEventButtonMask buttonMask;
+@end
+@implementation TestMouseEvent
 @end
 
 static void Finish(NSString *error) {
@@ -78,6 +97,41 @@ static NSArray<NSDictionary *> *Records(void) {
 }
 static void After(double seconds, dispatch_block_t block) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(seconds*NSEC_PER_SEC)), dispatch_get_main_queue(), block);
+}
+static void TestPrimaryPointer(UIView *view, dispatch_block_t done) {
+    Check(ECKTouchInstalled, @"primary mouse touch hooks installed");
+    NSUInteger before = Records().count;
+    ForwardedTouches = 0;
+    TestTouch *touch = [TestTouch new]; touch.type = UITouchTypeIndirectPointer; touch.point = CGPointMake(120,200);
+    TestMouseEvent *event = [TestMouseEvent new]; event.buttonMask = UIEventButtonMaskPrimary;
+    NSSet<UITouch *> *touches = (NSSet<UITouch *> *)[NSSet setWithObject:touch];
+    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
+    TestPointer *hover = [TestPointer new]; hover.state = UIGestureRecognizerStateEnded;
+    [ECKMouse hovering:(UIHoverGestureRecognizer *)(id)hover];
+    touch.point = CGPointMake(400,600);
+    [view touchesMoved:touches withEvent:(UIEvent *)(id)event];
+    event.buttonMask = 0;
+    [view touchesEnded:touches withEvent:(UIEvent *)(id)event];
+    event.buttonMask = UIEventButtonMaskPrimary;
+    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
+    [view touchesCancelled:touches withEvent:(UIEvent *)(id)event];
+    Check(ForwardedTouches == 0, @"captured primary touches never also reach winit");
+    touch.type = UITouchTypeDirect;
+    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
+    touch.type = UITouchTypeStylus;
+    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
+    touch.type = UITouchTypeIndirectPointer; event.buttonMask = UIEventButtonMaskSecondary;
+    [view touchesBegan:touches withEvent:(UIEvent *)(id)event];
+    Check(ForwardedTouches == 3, @"finger Pencil and secondary touches retain original routing");
+    After(0.3, ^{
+        NSArray<NSDictionary *> *records = Records();
+        Check(records.count == before + 5, @"primary drag and cancellation produce five ordered records without hover exit");
+        NSArray *drag = [records subarrayWithRange:NSMakeRange(before,5)];
+        Check([drag[0][@"button"] isEqual:@"primary"] && [drag[0][@"down"] boolValue] &&
+            [drag[1][@"x"] doubleValue] == 400 && !drag[1][@"down"] && ![drag[2][@"down"] boolValue], @"primary down move up survive crossing panels");
+        Check([drag[4][@"phase"] isEqual:@"cancel"] && !ECKPrimaryDown, @"cancel releases primary mouse ownership");
+        done();
+    });
 }
 // No delegate.window property and no scene manifest, matching winit's legacy lifecycle.
 @interface TestDelegate : UIResponder <UIApplicationDelegate>
@@ -138,12 +192,14 @@ static void After(double seconds, dispatch_block_t block) {
                                         for (NSDictionary *record in Records()) if ([record[@"kind"] isEqual:@"pointer"]) [pointerRecords addObject:record];
                                         Check(pointerRecords.count==3, @"hover and right click produce three ordered pointer records");
                                         Check([pointerRecords[0][@"x"] doubleValue]==120 && [pointerRecords[1][@"down"] boolValue] && ![pointerRecords[2][@"down"] boolValue], @"secondary down/up preserve hover coordinates");
-                                        [guest presentViewController:[UIViewController new] animated:NO completion:^{
-                                            After(0.5, ^{
-                                                Check(!ECKHandle(guest,Press(44,YES,0)), @"guest system modal still blocks editor keys");
-                                                Finish(nil);
-                                            });
-                                        }];
+                                        TestPrimaryPointer(guest.view, ^{
+                                            [guest presentViewController:[UIViewController new] animated:NO completion:^{
+                                                After(0.5, ^{
+                                                    Check(!ECKHandle(guest,Press(44,YES,0)), @"guest system modal still blocks editor keys");
+                                                    Finish(nil);
+                                                });
+                                            }];
+                                        });
                                     });
                                 });
                             }];
@@ -159,3 +215,4 @@ static void After(double seconds, dispatch_block_t block) {
 int main(int argc, char **argv) {
     @autoreleasepool { return UIApplicationMain(argc,argv,nil,NSStringFromClass(TestDelegate.class)); }
 }
+

@@ -384,17 +384,25 @@ index 00000000..5728466c
 +}
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..5688229e
+index 00000000..60a3c392
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,236 @@
 +//! Bounded, persistent diagnostics available without iPadOS Analytics reports.
 +use std::path::PathBuf;
 +
 +use effectcraft_ui_egui::EffectcraftApp;
 +use eframe::egui;
 +
++pub fn install(app: &mut EffectcraftApp) -> std::rc::Rc<std::cell::Cell<bool>> {
++    let requested = std::rc::Rc::new(std::cell::Cell::new(false));
++    let flag = requested.clone();
++    app.hooks.diagnostics = Some(Box::new(move || flag.set(true)));
++    requested
++}
++
 +pub struct DiagnosticApp {
++    pub requested: std::rc::Rc<std::cell::Cell<bool>>,
 +    pub app: EffectcraftApp,
 +    pub files: crate::files::Files,
 +    pub bridge: crate::bridge::Bridge,
@@ -423,7 +431,7 @@ index 00000000..5688229e
 +    }
 +
 +    fn set_cache(&mut self, mib: u32) {
-+        let mib = mib.clamp(64, 1024);
++        let mib = mib.clamp(64, 2048);
 +        self.app.stop();
 +        self.app.session.prefs.memory.preview_cache_mb = mib;
 +        self.app.session.prefs_changed();
@@ -458,19 +466,14 @@ index 00000000..5688229e
 +    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
 +        self.app.ui(ui, frame);
 +        let ctx = ui.ctx();
-+        egui::Area::new(egui::Id::new("ipad-diagnostics-button"))
-+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -30.0))
-+            .order(egui::Order::Foreground)
-+            .show(ctx, |ui| {
-+                if ui.button("Diagnostics · build 12").clicked() {
-+                    self.open = !self.open;
-+                    self.refresh();
-+                }
-+            });
++        if self.requested.replace(false) {
++            self.open = true;
++            self.refresh();
++        }
 +        if self.open {
 +            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +            let mut open = self.open;
-+            egui::Window::new("iPad preview & diagnostics · build 12").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("Diagnostics · build 13").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
 +                ui.label(&self.keyboard.native_status);
 +                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
@@ -480,7 +483,7 @@ index 00000000..5688229e
 +                ui.horizontal(|ui| {
 +                    ui.label("Preview cache:");
 +                    let current = self.app.frames.budget() >> 20;
-+                    for mib in [256_u32, 512, 1024] {
++                    for mib in [256_u32, 512, 1024, 2048] {
 +                        if ui.selectable_label(current == mib as usize, format!("{mib} MiB")).clicked() {
 +                            self.set_cache(mib);
 +                        }
@@ -603,6 +606,22 @@ index 00000000..5688229e
 +        self.app.session.save_prefs();
 +        let _ = self.app.session.autosave_wait();
 +        self.app.on_exit();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    #[test]
++    fn diagnostics_are_opened_by_help_command_only_when_installed() {
++        let mut app = effectcraft_ui_egui::EffectcraftApp::new(effectcraft_engine::Session::default());
++        let ctx = eframe::egui::Context::default();
++        assert!(effectcraft_ui_egui::menus::invoke(&mut app, &ctx, "platform.diagnostics", serde_json::json!({})).is_err());
++        let requested = super::install(&mut app);
++        assert!(!requested.get());
++        let entry = effectcraft_ui_egui::menus::menu_items(&app).into_iter().find(|e| e.id == "platform.diagnostics").unwrap();
++        assert_eq!(entry.path, ["Help"]);
++        effectcraft_ui_egui::menus::invoke(&mut app, &ctx, "platform.diagnostics", serde_json::json!({})).unwrap();
++        assert!(requested.get());
 +    }
 +}
 diff --git a/apps/effectcraft-ios/src/files.rs b/apps/effectcraft-ios/src/files.rs
@@ -1411,10 +1430,10 @@ index 00000000..9b1a92dc
 +}
 diff --git a/apps/effectcraft-ios/src/keyboard.rs b/apps/effectcraft-ios/src/keyboard.rs
 new file mode 100644
-index 00000000..6b505fde
+index 00000000..25a7118b
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/keyboard.rs
-@@ -0,0 +1,420 @@
+@@ -0,0 +1,447 @@
 +//! Bounded hardware-keyboard input, delivered before egui processes RawInput.
 +use eframe::egui::{self, Event, Key, Modifiers};
 +use serde_json::{Value, json};
@@ -1437,6 +1456,7 @@ index 00000000..6b505fde
 +    last_status_read: std::time::Instant,
 +    wake: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 +    pub pointer_received: u64,
++    primary_down: bool,
 +}
 +
 +fn read_bounded(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
@@ -1474,20 +1494,22 @@ index 00000000..6b505fde
 +            last_status_read: std::time::Instant::now(),
 +            wake: None,
 +            pointer_received: 0,
++            primary_down: false,
 +        }
 +    }
 +    fn reset(&mut self, events: &mut Vec<Event>) {
 +        // A lost-focus release must not become a Space tap and start a preview.
 +        events.push(Event::WindowFocused(false));
 +        self.held.clear();
++        self.primary_down = false;
 +        self.modifiers = Modifiers::NONE;
 +        events.push(Event::ModifiersChanged(self.modifiers));
 +    }
-+    fn record(&mut self, value: &Value, text_focus: bool, blocked: bool, events: &mut Vec<Event>) -> Result<(), String> {
++    pub(crate) fn record(&mut self, value: &Value, text_focus: bool, blocked: bool, events: &mut Vec<Event>) -> Result<(), String> {
 +        if value["kind"].as_str() == Some("pointer") {
 +            self.pointer_received = self.pointer_received.saturating_add(1);
 +            if value["phase"].as_str() == Some("gone") {
-+                events.push(Event::PointerGone);
++                if !self.primary_down { events.push(Event::PointerGone); }
 +                return Ok(());
 +            }
 +            let x = value["x"].as_f64().filter(|v| v.is_finite() && v.abs() < 100_000.0).ok_or("Invalid pointer X")?;
@@ -1495,8 +1517,14 @@ index 00000000..6b505fde
 +            let pos = egui::pos2(x as f32, y as f32);
 +            events.push(Event::PointerMoved(pos));
 +            if let Some(down) = value["down"].as_bool() {
-+                events.push(Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: down, modifiers: self.modifiers });
++                let button = match value["button"].as_str() {
++                    Some("primary") => { self.primary_down = down; egui::PointerButton::Primary }
++                    None | Some("secondary") => egui::PointerButton::Secondary,
++                    _ => return Err("Unsupported pointer button".into()),
++                };
++                events.push(Event::PointerButton { pos, button, pressed: down, modifiers: self.modifiers });
 +            }
++            if value["phase"].as_str() == Some("cancel") { events.push(Event::PointerGone); }
 +            return Ok(());
 +        }
 +        if value["kind"].as_str() == Some("reset") {
@@ -1610,6 +1638,7 @@ index 00000000..6b505fde
 +                .and_then(|b| serde_json::from_slice::<Value>(&b).map_err(|e| e.to_string()))
 +                .and_then(|mut value| {
 +                    if value["kind"].as_str() == Some("pointer") {
++                        if value["phase"].as_str() == Some("cancel") { egui::DragAndDrop::clear_payload(ctx); }
 +                        let zoom = f64::from(ctx.zoom_factor());
 +                        for axis in ["x", "y"] {
 +                            if let Some(v) = value[axis].as_f64() {
@@ -1628,7 +1657,7 @@ index 00000000..6b505fde
 +        if had_records && input.focused && input.events.iter().any(|e| matches!(e, Event::WindowFocused(false))) {
 +            input.events.push(Event::WindowFocused(true));
 +        }
-+        if !self.held.is_empty() {
++        if !self.held.is_empty() || self.primary_down {
 +            ctx.request_repaint();
 +        }
 +        if let Some(error) = error { Err(error) } else { Ok(()) }
@@ -1746,6 +1775,23 @@ index 00000000..6b505fde
 +        assert_eq!(events.iter().filter(|e| matches!(e, Event::PointerButton { button: egui::PointerButton::Secondary, .. })).count(), 2);
 +        assert!(!events.iter().any(|e| matches!(e, Event::PointerButton { button: egui::PointerButton::Primary, .. })));
 +        assert!(bridge.record(&json!({"kind":"pointer","x":1e300,"y":0}), false, false, &mut events).is_err());
++    }
++    #[test]
++    fn primary_drag_survives_hover_exit_and_releases_on_cancel() {
++        let mut bridge = Keyboard::new();
++        let mut events = vec![];
++        bridge.record(&json!({"kind":"pointer","button":"primary","x":20,"y":30,"down":true}), false, false, &mut events).unwrap();
++        bridge.record(&json!({"kind":"pointer","phase":"gone"}), false, false, &mut events).unwrap();
++        bridge.record(&json!({"kind":"pointer","button":"primary","x":200,"y":300}), false, false, &mut events).unwrap();
++        assert!(bridge.primary_down);
++        assert!(!events.iter().any(|event| matches!(event, Event::PointerGone)));
++        bridge.record(&json!({"kind":"pointer","button":"primary","phase":"cancel","x":200,"y":300,"down":false}), false, false, &mut events).unwrap();
++        assert!(!bridge.primary_down);
++        let buttons: Vec<bool> = events.iter().filter_map(|event| match event {
++            Event::PointerButton { button: egui::PointerButton::Primary, pressed, .. } => Some(*pressed), _ => None,
++        }).collect();
++        assert_eq!(buttons, [true, false]);
++        assert!(matches!(events.last(), Some(Event::PointerGone)));
 +    }
 +    fn key(code: u32, down: bool, modifiers: u64) -> Value {
 +        json!({"kind":"key","code":code,"down":down,"flags":modifiers})
@@ -1866,10 +1912,10 @@ index 00000000..9441c9b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..36af9ad8
+index 00000000..0bb762e9
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,118 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
 +//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -1882,6 +1928,8 @@ index 00000000..36af9ad8
 +mod settings;
 +mod lifecycle;
 +mod render_files;
++#[cfg(test)]
++mod media_drag_tests;
 +mod bridge;
 +mod diagnostics;
 +mod files;
@@ -1898,7 +1946,7 @@ index 00000000..36af9ad8
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=12 startup workers=1 preview_mib=1024 disk_gib=1 hardware_keyboard=responder_chain");
++    log::info!(target: "effectcraft_diagnostics", "build=13 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1910,9 +1958,9 @@ index 00000000..36af9ad8
 +        });
 +    }
 +    eframe::run_native(
-+        "EffectCraft Native Preview",
++        "EffectCraft",
 +        eframe::NativeOptions {
-+            viewport: eframe::egui::ViewportBuilder::default().with_title("EffectCraft Native Preview").with_fullscreen(true),
++            viewport: eframe::egui::ViewportBuilder::default().with_title("EffectCraft").with_fullscreen(true),
 +            renderer: eframe::Renderer::Wgpu,
 +            // UIKit's event loop must be entered once, rather than run-on-demand.
 +            run_and_return: false,
@@ -1938,7 +1986,7 @@ index 00000000..36af9ad8
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => format!("Build 12: audio, persistent settings, recovery and render delivery. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
++                Ok(_) => format!("EffectCraft · build 13. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -1967,7 +2015,9 @@ index 00000000..36af9ad8
 +            let files = files::Files::install(&mut app, &cc.egui_ctx);
 +            let bridge = bridge::Bridge::install(&mut app, &cc.egui_ctx, files.native_documents());
 +            let renders = render_files::RenderFiles::install(&mut app, &cc.egui_ctx, files.native_documents());
++            let requested = diagnostics::install(&mut app);
 +            Ok(Box::new(diagnostics::DiagnosticApp {
++                requested,
 +                app,
 +                files,
 +                bridge,
@@ -1984,6 +2034,67 @@ index 00000000..36af9ad8
 +        }),
 +    )
 +}
+diff --git a/apps/effectcraft-ios/src/media_drag_tests.rs b/apps/effectcraft-ios/src/media_drag_tests.rs
+new file mode 100644
+index 00000000..a2295960
+--- /dev/null
++++ b/apps/effectcraft-ios/src/media_drag_tests.rs
+@@ -0,0 +1,55 @@
++//! Imported media must travel through the actual iPad pointer protocol into the editor.
++use crate::keyboard::Keyboard;
++use effectcraft_ui_egui::EffectcraftApp;
++use effectcraft_engine::project::{ItemKind, LayerSource};
++use eframe::egui::{self, pos2, vec2};
++use egui_kittest::Harness;
++use serde_json::json;
++
++fn run_drop(target: &str) {
++    let directory = std::env::temp_dir().join(format!("ec-media-drag-{}-{}", std::process::id(), target.replace('.', "-")));
++    std::fs::create_dir_all(&directory).unwrap();
++    let path = directory.join("Imported audio.wav");
++    let mut wav = Vec::new();
++    wav.extend_from_slice(b"RIFF"); wav.extend_from_slice(&16036_u32.to_le_bytes()); wav.extend_from_slice(b"WAVEfmt ");
++    wav.extend_from_slice(&16_u32.to_le_bytes()); wav.extend_from_slice(&1_u16.to_le_bytes()); wav.extend_from_slice(&1_u16.to_le_bytes());
++    wav.extend_from_slice(&8000_u32.to_le_bytes()); wav.extend_from_slice(&16000_u32.to_le_bytes());
++    wav.extend_from_slice(&2_u16.to_le_bytes()); wav.extend_from_slice(&16_u16.to_le_bytes());
++    wav.extend_from_slice(b"data"); wav.extend_from_slice(&16000_u32.to_le_bytes()); wav.resize(16044, 0);
++    std::fs::write(&path, wav).unwrap();
++    let mut session = effectcraft_host::session();
++    session.execute("comp.new", json!({"name":"Drop target", "width":640, "height":360, "duration":10, "frameRate":30})).unwrap();
++    session.execute("file.import", json!({"paths":[path]})).unwrap();
++    let item = *session.project.items.iter().find(|(_, item)| matches!(item.kind, ItemKind::Footage(_))).unwrap().0;
++    let mut harness = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(session));
++    harness.run_steps(4);
++    let point = |h: &Harness<'_, EffectcraftApp>, id: &str| {
++        let e = h.state().auto.find(id).unwrap_or_else(|| panic!("missing {id}"));
++        pos2(e.rect[0] + e.rect[2] * 0.5, e.rect[1] + e.rect[3] * 0.5)
++    };
++    let from = point(&harness, &format!("project.item.{}.name", item.0));
++    let to = point(&harness, target);
++    let mut keyboard = Keyboard::new();
++    let send = |h: &mut Harness<'_, EffectcraftApp>, keyboard: &mut Keyboard, p: egui::Pos2, down: Option<bool>| {
++        let mut record = json!({"kind":"pointer", "button":"primary", "x":p.x, "y":p.y});
++        if let Some(down) = down { record["down"] = json!(down); }
++        let mut events = vec![];
++        keyboard.record(&record, false, false, &mut events).unwrap();
++        for event in events { h.event(event); }
++        h.step();
++    };
++    send(&mut harness, &mut keyboard, from, None);
++    send(&mut harness, &mut keyboard, from, Some(true));
++    for step in 1..=12 { send(&mut harness, &mut keyboard, from + (to - from) * (step as f32 / 12.0), None); }
++    send(&mut harness, &mut keyboard, to, Some(false));
++    harness.run_steps(3);
++    let layers = &harness.state().session.active_comp().unwrap().layers;
++    assert_eq!(layers.len(), 1, "drop must add one layer at {target}");
++    assert!(matches!(layers[0].source, LayerSource::Footage { item: id } if id == item));
++    drop(harness);
++    let _ = std::fs::remove_dir_all(directory);
++}
++#[test]
++fn imported_media_drag_to_composition_adds_one_editable_layer() { run_drop("viewer.comp"); }
++#[test]
++fn imported_media_drag_to_timeline_adds_one_editable_layer() { run_drop("timeline.empty"); }
 diff --git a/apps/effectcraft-ios/src/native_documents.rs b/apps/effectcraft-ios/src/native_documents.rs
 new file mode 100644
 index 00000000..bb218957
@@ -2552,10 +2663,10 @@ index 00000000..e50c72a1
 +}
 diff --git a/apps/effectcraft-ios/src/settings.rs b/apps/effectcraft-ios/src/settings.rs
 new file mode 100644
-index 00000000..c0c76b77
+index 00000000..3a265bcd
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/settings.rs
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,76 @@
 +//! Stable settings and recovery storage, including LiveContainer upgrades.
 +use std::{path::Path, sync::Arc};
 +use effectcraft_engine::{Session, config::DirConfig};
@@ -2568,7 +2679,7 @@ index 00000000..c0c76b77
 +    if first_launch {
 +        session.prefs.memory.layer_cache_mb = 64;
 +        session.prefs.memory.media_cache_mb = 64;
-+        session.prefs.memory.preview_cache_mb = 1024;
++        session.prefs.memory.preview_cache_mb = 2048;
 +        session.prefs.previews.cache_frames_when_idle = true;
 +        session.prefs.disk.disk_cache_enabled = true;
 +        session.prefs.disk.disk_cache_max_gb = 1;
@@ -2576,6 +2687,10 @@ index 00000000..c0c76b77
 +        session.prefs.auto_save.interval_minutes = 1;
 +        session.prefs.export.default_output_folder = documents.join("Renders").to_string_lossy().into_owned();
 +    }
++    // Apply the requested larger default once for existing build-12 installs, then
++    // respect subsequent choices made in Settings or Diagnostics.
++    let migrated = session.config.as_ref().and_then(|c| c.read("ipad-preview-cache-v13")).as_deref() == Some("2048");
++    if !migrated { session.prefs.memory.preview_cache_mb = 2048; }
 +    // OS cache paths may change across installs; preferences belong in Documents.
 +    session.prefs.disk.disk_cache_folder = effectcraft_engine::render::disk_cache::default_folder().to_string_lossy().into_owned();
 +    session.autosave_folder_override = Some(documents.join("Recovery"));
@@ -2583,18 +2698,38 @@ index 00000000..c0c76b77
 +    session.check_footage_on_open = true;
 +    session.prefs_changed();
 +    session.save_prefs();
++    if let Some(config) = &session.config {
++        if let Err(error) = config.write("ipad-preview-cache-v13", "2048") { log::warn!("Cache preference migration: {error}"); }
++    }
 +}
 +
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
 +    #[test]
++    fn upgrade_applies_two_gib_once_and_keeps_later_choice() {
++        let root = std::env::temp_dir().join(format!("ec-cache-upgrade-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        let mut old = Session::default();
++        old.config = Some(Arc::new(DirConfig::new(root.join("Settings"))));
++        old.prefs.memory.preview_cache_mb = 1024;
++        old.save_prefs();
++        configure(&mut old, &root);
++        assert_eq!(old.prefs.memory.preview_cache_mb, 2048);
++        old.prefs.memory.preview_cache_mb = 512;
++        old.save_prefs();
++        let mut next = Session::default();
++        configure(&mut next, &root);
++        assert_eq!(next.prefs.memory.preview_cache_mb, 512);
++        let _ = std::fs::remove_dir_all(root);
++    }
++    #[test]
 +    fn relaunch_keeps_cache_and_autosave_choices() {
 +        let root = std::env::temp_dir().join(format!("ec-settings-{}", std::process::id()));
 +        let _ = std::fs::remove_dir_all(&root);
 +        let mut first = Session::default();
 +        configure(&mut first, &root);
-+        assert_eq!(first.prefs.memory.preview_cache_mb, 1024);
++        assert_eq!(first.prefs.memory.preview_cache_mb, 2048);
 +        first.prefs.memory.preview_cache_mb = 256;
 +        first.prefs.disk.disk_cache_enabled = false;
 +        first.prefs.auto_save.interval_minutes = 3;
@@ -4827,7 +4962,7 @@ index c1503215..be6f1b4f 100644
      static C: OnceLock<Mutex<HashMap<u64, (u64, Arc<Layout>)>>> = OnceLock::new();
      C.get_or_init(Default::default)
 diff --git a/crates/ui-egui/src/frames.rs b/crates/ui-egui/src/frames.rs
-index 059bc3a0..a297b4a5 100644
+index 059bc3a0..1f8fa6f6 100644
 --- a/crates/ui-egui/src/frames.rs
 +++ b/crates/ui-egui/src/frames.rs
 @@ -40,9 +40,19 @@ const MAX_KEEPERS: usize = 64;
@@ -4835,7 +4970,7 @@ index 059bc3a0..a297b4a5 100644
  /// video memory there is: each time the device runs out, the budget halves (to
  /// [`MIN_GPU_BUDGET`]) and the frame renders on the CPU (#106).
 -const GPU_BUDGET: usize = 1 << 30;
-+const IPAD_PREVIEW_MAX: usize = 1 << 30;
++const IPAD_PREVIEW_MAX: usize = 2 << 30;
 +const GPU_BUDGET: usize = if cfg!(target_os = "ios") { 256 << 20 } else { 1 << 30 };
  const MIN_GPU_BUDGET: usize = 64 << 20;
  
@@ -5122,22 +5257,24 @@ index fb381cfd..9bd1cfb9 100644
      let (icon, mode) = match app.session.prefs.appearance.appearance_mode.as_str() {
          "auto" => (Icon::Monitor, tr("Sync with System")),
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 105a075e..54d3bf36 100644
+index 105a075e..ed423031 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
-@@ -144,6 +144,11 @@ pub struct Hooks {
+@@ -144,6 +144,13 @@ pub struct Hooks {
      /// The system appearance for Settings ▸ Appearance ▸ Sync with System (the desktop app reads
      /// the Linux desktop portal); without it, what egui reports.
      pub system_theme: Option<SystemThemeFn>,
 +    /// Optional ZIP bridge supplied by the browser/iPad host.
 +    pub bridge_state: Option<Box<dyn Fn() -> Option<crate::menus::BridgeState>>>,
++    /// Open platform troubleshooting from Help, without a permanent canvas overlay.
++    pub diagnostics: Option<Box<dyn Fn()>>,
 +    pub bridge_action: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
 +    /// Save completed Render Queue output through the platform share/export picker.
 +    pub save_rendered: Option<Box<dyn Fn(Vec<String>) -> Result<(), String>>>,
      pub pick_files: Option<Box<dyn Fn(&[&str]) -> Vec<String>>>,
      pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
      pub pick_open_project: Option<Box<dyn Fn() -> Option<String>>>,
-@@ -1192,6 +1197,7 @@ impl EffectcraftApp {
+@@ -1192,6 +1199,7 @@ impl EffectcraftApp {
          };
          let mut queued = self.frames.inflight();
          let series = self.frame_series(cid, scale);
@@ -5145,7 +5282,7 @@ index 105a075e..54d3bf36 100644
          // The preview's position orders prefetch and eviction (#595).
          let playhead = plan.filter(|p| p.video).map(|p| frames::Playhead { series, cur, start: p.start, end: p.end, step: p.step, looping: p.looping });
          self.frames.set_playhead(playhead);
-@@ -1204,7 +1210,17 @@ impl EffectcraftApp {
+@@ -1204,7 +1212,17 @@ impl EffectcraftApp {
              let mut all = true;
              let n = (p.end - p.start) / p.step + 1;
              let fit = self.frames_that_fit(&c, scale);
@@ -5164,7 +5301,7 @@ index 105a075e..54d3bf36 100644
                  let mut cut = p;
                  (cut.start, cut.end) = (p.first, (p.first + (fit - 1) * p.step).min(p.end));
                  self.playback.plan = Some(cut);
-@@ -1214,7 +1230,8 @@ impl EffectcraftApp {
+@@ -1214,7 +1232,8 @@ impl EffectcraftApp {
              }
              let order: Vec<i64> = (0..n).filter_map(|k| p.frame_after(p.first, k)).collect();
              for f in order {
@@ -5174,7 +5311,7 @@ index 105a075e..54d3bf36 100644
                      continue;
                  }
                  all = false;
-@@ -1407,14 +1424,17 @@ impl EffectcraftApp {
+@@ -1407,14 +1426,17 @@ impl EffectcraftApp {
              return;
          }
          let cur = comp.frame_rate.frame_at(self.session.time()).clamp(wa, wb);
@@ -5195,10 +5332,10 @@ index 105a075e..54d3bf36 100644
              }
              pending = true;
 diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
-index 8b5fd1c3..6c5d8bd7 100644
+index 8b5fd1c3..3077c325 100644
 --- a/crates/ui-egui/src/menus.rs
 +++ b/crates/ui-egui/src/menus.rs
-@@ -12,6 +12,57 @@ use crate::dock::PanelKind;
+@@ -12,6 +12,70 @@ use crate::dock::PanelKind;
  use crate::state::{Resolution, Tool};
  use effectcraft_engine::menus::{MenuEntry, MenuNode};
  
@@ -5253,12 +5390,27 @@ index 8b5fd1c3..6c5d8bd7 100644
 +    nodes
 +}
 +
++fn platform_nodes(app: &EffectcraftApp, name: &str, children: &[MenuNode]) -> Vec<MenuNode> {
++    if name == "File" { return file_nodes(app, children); }
++    let mut nodes = children.to_vec();
++    if name == "Help" && app.hooks.diagnostics.is_some() {
++        nodes.push(MenuNode::Separator);
++        nodes.push(MenuNode::Item(MenuEntry {
++            label: "Diagnostics…".into(), command: "platform.diagnostics".into(), params: Value::Null,
++            shortcut: None, alt_shortcuts: Vec::new(),
++        }));
++    }
++    nodes
++}
++
  pub struct UiCommand {
      pub id: &'static str,
      pub label: &'static str,
-@@ -28,6 +79,10 @@ macro_rules! uic {
+@@ -27,7 +91,12 @@ macro_rules! uic {
+ 
  /// UI-only commands (not in the AE menus; shortcuts and the command palette).
  pub const UI_COMMANDS: &[UiCommand] = &[
++    uic!("platform.diagnostics", "Diagnostics…", ["Help"], None),
      uic!("window.dockAction", "Docking Action", [], None),
 +    uic!("bridge.importAEZip", "Import AE ZIP…", ["File"], None),
 +    uic!("bridge.exportProjectZip", "Export Project ZIP…", ["File"], None),
@@ -5267,10 +5419,15 @@ index 8b5fd1c3..6c5d8bd7 100644
      uic!("playback.ramPreview", "Preview (Numpad 0)", [], Some("Num0")),
      uic!("playback.preview.shiftSpacebar", "Preview (Shift+Spacebar)", [], Some("Shift+Space")),
      uic!("playback.preview.shiftNumpad0", "Preview (Shift+Numpad 0)", [], Some("Shift+Num0")),
-@@ -291,6 +346,20 @@ fn only_comp(p: &Value) -> Option<effectcraft_engine::project::ItemId> {
+@@ -291,6 +360,25 @@ fn only_comp(p: &Value) -> Option<effectcraft_engine::project::ItemId> {
  
  /// Execute a UI or engine command by id.
  pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
++    if id == "platform.diagnostics" {
++        app.hooks.diagnostics.as_ref().ok_or("Platform diagnostics unavailable")?();
++        ctx.request_repaint();
++        return Ok(Value::Null);
++    }
 +    if BRIDGE_COMMANDS.iter().any(|(command, _)| *command == id) {
 +        let state = bridge_state(app).ok_or("The iPad ZIP bridge is unavailable")?;
 +        if !bridge_enabled(&state, id) {
@@ -5288,17 +5445,18 @@ index 8b5fd1c3..6c5d8bd7 100644
      if id == "effects.copyPresetsFolderPath" {
          return frontend(app, ctx, id, params);
      }
-@@ -1554,6 +1623,9 @@ pub(crate) fn entry_checked(app: &EffectcraftApp, e: &MenuEntry) -> Option<bool>
+@@ -1554,6 +1642,10 @@ pub(crate) fn entry_checked(app: &EffectcraftApp, e: &MenuEntry) -> Option<bool>
  }
  
  pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
++    if e.command == "platform.diagnostics" { return app.hooks.diagnostics.is_some(); }
 +    if BRIDGE_COMMANDS.iter().any(|(id, _)| *id == e.command) {
 +        return bridge_state(app).is_some_and(|s| bridge_enabled(&s, &e.command));
 +    }
      if app.ui.focused == PanelKind::Project {
          match e.command.as_str() {
              "edit.duplicate" => {
-@@ -1582,7 +1654,7 @@ pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
+@@ -1582,7 +1674,7 @@ pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
  
  /// Every menu entry, flattened with its submenu path.
  pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
@@ -5307,13 +5465,19 @@ index 8b5fd1c3..6c5d8bd7 100644
          .into_iter()
          .map(|(path, e)| MenuItem {
              id: e.command.clone(),
-@@ -1592,8 +1664,16 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
+@@ -1592,8 +1684,22 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
              enabled: entry_enabled(app, e),
              checked: entry_checked(app, e),
              params: e.params.clone(),
 -        })
 -        .collect()
 +        }).collect();
++    if app.hooks.diagnostics.is_some() {
++        items.push(MenuItem {
++            id: "platform.diagnostics".into(), label: "Diagnostics…".into(), path: vec!["Help".into()],
++            shortcut: None, enabled: true, checked: None, params: Value::Null,
++        });
++    }
 +    for node in bridge_entries(app) {
 +        if let MenuNode::Item(e) = node {
 +            items.push(MenuItem {
@@ -5326,33 +5490,29 @@ index 8b5fd1c3..6c5d8bd7 100644
  }
  
  /// Shortcut text in this OS's notation (`⇧⌘K` on macOS, `Ctrl+Shift+K` elsewhere).
-@@ -1981,7 +2061,14 @@ pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
+@@ -1981,7 +2087,10 @@ pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
                  if let MenuNode::Submenu { label, children } = node {
                      let r = ui.menu_button(crate::i18n::label(app, "", label), |ui| {
                          ui.set_min_width(if label == "Effect" { 200.0 } else { 280.0 });
 -                        crate::widgets::menu_scroll(ui, |ui| menu_nodes(app, ui, children, &mut clicked, &mut nav, 0));
 +                        crate::widgets::menu_scroll(ui, |ui| {
-+                            if label == "File" {
-+                                let nodes = file_nodes(app, children);
-+                                menu_nodes(app, ui, &nodes, &mut clicked, &mut nav, 0);
-+                            } else {
-+                                menu_nodes(app, ui, children, &mut clicked, &mut nav, 0);
-+                            }
++                            let nodes = platform_nodes(app, label, children);
++                            menu_nodes(app, ui, &nodes, &mut clicked, &mut nav, 0);
 +                        });
                      });
                      nav.top(&r.response);
                      app.auto.add(&format!("menu.{label}"), r.response.rect, label);
-@@ -2004,7 +2091,8 @@ pub(crate) fn menu_contents(app: &mut EffectcraftApp, ui: &mut egui::Ui, name: &
+@@ -2004,7 +2113,8 @@ pub(crate) fn menu_contents(app: &mut EffectcraftApp, ui: &mut egui::Ui, name: &
      if let Some(MenuNode::Submenu { children, .. }) =
          effectcraft_engine::menus::menu_bar().iter().find(|n| matches!(n, MenuNode::Submenu { label, .. } if label == name))
      {
 -        menu_nodes(app, ui, children, &mut clicked, &mut crate::menu_keys::Nav::default(), 0);
-+        let nodes = if name == "File" { file_nodes(app, children) } else { children.clone() };
++        let nodes = platform_nodes(app, name, children);
 +        menu_nodes(app, ui, &nodes, &mut clicked, &mut crate::menu_keys::Nav::default(), 0);
      }
      clicked.map(|(id, params)| (id, if params.is_null() { json!({}) } else { params }))
  }
-@@ -2104,7 +2192,7 @@ pub(crate) fn submenu_at(app: &mut EffectcraftApp, ui: &mut egui::Ui, path: &[&s
+@@ -2104,7 +2214,7 @@ pub(crate) fn submenu_at(app: &mut EffectcraftApp, ui: &mut egui::Ui, path: &[&s
  }
  
  /// The menu bar's entry for `command` in a panel's context menu (see [`submenu_at`]).
@@ -5361,7 +5521,7 @@ index 8b5fd1c3..6c5d8bd7 100644
      if let Some((_, e)) = effectcraft_engine::menus::entries().into_iter().find(|(_, e)| e.command == command)
          && menu_entry(app, ui, e).clicked()
      {
-@@ -2124,7 +2212,7 @@ fn gutter(checked: bool) -> egui::Atom<'static> {
+@@ -2124,7 +2234,7 @@ fn gutter(checked: bool) -> egui::Atom<'static> {
      (if checked { "✔" } else { "" }).atom_size(egui::vec2(14.0, 14.0))
  }
  
@@ -5370,7 +5530,7 @@ index 8b5fd1c3..6c5d8bd7 100644
      let (label, check, enabled) = (entry_label(app, e), gutter(entry_checked(app, e) == Some(true)), entry_enabled(app, e));
      // Edit ▸ Label's entries show the label's colour before its name.
      if e.command == "edit.label"
-@@ -2132,13 +2220,16 @@ fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::R
+@@ -2132,13 +2242,16 @@ fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::R
      {
          let out = ui.add_enabled_ui(enabled, |ui| egui::Button::new((check, crate::widgets::label_swatch(), label)).atom_ui(ui)).inner;
          crate::widgets::paint_label_swatch(ui, &out, l, &app.tokens);
@@ -5388,7 +5548,7 @@ index 8b5fd1c3..6c5d8bd7 100644
  }
  
  /// View ▸ Zoom In / Zoom Out: the next standard magnification (as a share of screen pixels, so
-@@ -2194,6 +2285,53 @@ mod tests {
+@@ -2194,6 +2307,53 @@ mod tests {
          assert_eq!(starts, vec![Some(egui::Modifiers::SHIFT), Some(egui::Modifiers::SHIFT)]);
      }
  
