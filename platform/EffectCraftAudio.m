@@ -3,7 +3,7 @@
 #import <AVFoundation/AVFoundation.h>
 #include <unistd.h>
 
-static UIBackgroundTaskIdentifier ECTask = UIBackgroundTaskInvalid;
+static UIBackgroundTaskIdentifier ECTask;
 static void ECEndTask(void) {
     if (ECTask != UIBackgroundTaskInvalid) {
         UIBackgroundTaskIdentifier task = ECTask;
@@ -30,13 +30,15 @@ static void ECActivate(void) {
 }
 __attribute__((constructor,used)) static void ECInstallAudio(void) {
     @autoreleasepool {
+        ECTask = UIBackgroundTaskInvalid;
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         [center addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) { ECActivate(); }];
         [center addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
             ECState(NO);
             if (ECTask == UIBackgroundTaskInvalid) {
                 ECTask = [UIApplication.sharedApplication beginBackgroundTaskWithName:@"EffectCraft recovery" expirationHandler:^{ ECEndTask(); }];
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ ECEndTask(); });
+                UIBackgroundTaskIdentifier task = ECTask;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ if (ECTask == task) ECEndTask(); });
             }
         }];
         [center addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
