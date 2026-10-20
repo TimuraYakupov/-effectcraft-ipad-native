@@ -2,6 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 static UIBackgroundTaskIdentifier ECTask;
 static void ECEndTask(void) {
@@ -12,7 +13,8 @@ static void ECEndTask(void) {
     }
 }
 static void ECState(BOOL active) {
-    NSString *home = NSProcessInfo.processInfo.environment[@"HOME"];
+    const char *value = getenv("HOME");
+    NSString *home = value ? [NSString stringWithUTF8String:value] : nil;
     if (!home) return;
     NSString *folder = [home stringByAppendingPathComponent:@"Library/Caches/EffectCraft/DocumentBridge8"];
     [NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
