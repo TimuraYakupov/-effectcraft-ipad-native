@@ -384,7 +384,7 @@ index 00000000..5728466c
 +}
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..60a3c392
+index 00000000..a64b3b0c
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
 @@ -0,0 +1,236 @@
@@ -473,7 +473,7 @@ index 00000000..60a3c392
 +        if self.open {
 +            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +            let mut open = self.open;
-+            egui::Window::new("Diagnostics · build 14").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("Diagnostics · build 15").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
 +                ui.label(&self.keyboard.native_status);
 +                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
@@ -1912,7 +1912,7 @@ index 00000000..9441c9b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..0bb762e9
+index 00000000..af0b327e
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
 @@ -0,0 +1,118 @@
@@ -1946,7 +1946,7 @@ index 00000000..0bb762e9
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=14 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
++    log::info!(target: "effectcraft_diagnostics", "build=15 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1986,7 +1986,7 @@ index 00000000..0bb762e9
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => format!("EffectCraft · build 14. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
++                Ok(_) => format!("EffectCraft · build 15. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -2036,11 +2036,11 @@ index 00000000..0bb762e9
 +}
 diff --git a/apps/effectcraft-ios/src/media_drag_tests.rs b/apps/effectcraft-ios/src/media_drag_tests.rs
 new file mode 100644
-index 00000000..a2295960
+index 00000000..cbbf687d
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/media_drag_tests.rs
-@@ -0,0 +1,55 @@
-+//! Imported media must travel through the actual iPad pointer protocol into the editor.
+@@ -0,0 +1,106 @@
++//! Imported media through desktop pointers and the native winit touch-release sequence.
 +use crate::keyboard::Keyboard;
 +use effectcraft_ui_egui::EffectcraftApp;
 +use effectcraft_engine::project::{ItemKind, LayerSource};
@@ -2048,8 +2048,11 @@ index 00000000..a2295960
 +use egui_kittest::Harness;
 +use serde_json::json;
 +
-+fn run_drop(target: &str) {
-+    let directory = std::env::temp_dir().join(format!("ec-media-drag-{}-{}", std::process::id(), target.replace('.', "-")));
++#[derive(Clone, Copy, Debug)]
++enum InputPath { Mouse, NativeTouch, NativeTouchOutside, NativeTouchCancel }
++
++fn run_drop(target: &str, input: InputPath) {
++    let directory = std::env::temp_dir().join(format!("ec-media-drag-{}-{}-{input:?}", std::process::id(), target.replace('.', "-")));
 +    std::fs::create_dir_all(&directory).unwrap();
 +    let path = directory.join("Imported audio.wav");
 +    let mut wav = Vec::new();
@@ -2073,6 +2076,30 @@ index 00000000..a2295960
 +    let to = point(&harness, target);
 +    let mut keyboard = Keyboard::new();
 +    let send = |h: &mut Harness<'_, EffectcraftApp>, keyboard: &mut Keyboard, p: egui::Pos2, down: Option<bool>| {
++        if !matches!(input, InputPath::Mouse) {
++            let phase = match down {
++                Some(true) => egui::TouchPhase::Start,
++                Some(false) => if matches!(input, InputPath::NativeTouchCancel) { egui::TouchPhase::Cancel } else { egui::TouchPhase::End },
++                None => egui::TouchPhase::Move,
++            };
++            h.event(egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: p, force: None });
++            match down {
++                Some(false) => {
++                    if !matches!(input, InputPath::NativeTouchCancel) {
++                        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
++                    }
++                    h.event(egui::Event::PointerGone);
++                }
++                _ => {
++                    h.event(egui::Event::PointerMoved(p));
++                    if down == Some(true) {
++                        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
++                    }
++                }
++            }
++            h.step();
++            return;
++        }
 +        let mut record = json!({"kind":"pointer", "button":"primary", "x":p.x, "y":p.y});
 +        if let Some(down) = down { record["down"] = json!(down); }
 +        let mut events = vec![];
@@ -2080,21 +2107,45 @@ index 00000000..a2295960
 +        for event in events { h.event(event); }
 +        h.step();
 +    };
-+    send(&mut harness, &mut keyboard, from, None);
++    harness.event(egui::Event::PointerMoved(from));
++    harness.step();
 +    send(&mut harness, &mut keyboard, from, Some(true));
 +    for step in 1..=12 { send(&mut harness, &mut keyboard, from + (to - from) * (step as f32 / 12.0), None); }
-+    send(&mut harness, &mut keyboard, to, Some(false));
++    let release = if matches!(input, InputPath::NativeTouchOutside) { pos2(-20.0, -20.0) } else { to };
++    if release != to { send(&mut harness, &mut keyboard, release, None); }
++    send(&mut harness, &mut keyboard, release, Some(false));
++    if matches!(input, InputPath::NativeTouch) {
++        harness.ctx.input(|i| {
++            assert!(i.pointer.hover_pos().is_none(), "release must reproduce disappearing iPad hover");
++            assert_eq!(i.pointer.interact_pos(), Some(release), "release position must remain available for interactions");
++        });
++    }
 +    harness.run_steps(3);
 +    let layers = &harness.state().session.active_comp().unwrap().layers;
-+    assert_eq!(layers.len(), 1, "drop must add one layer at {target}");
-+    assert!(matches!(layers[0].source, LayerSource::Footage { item: id } if id == item));
++    if matches!(input, InputPath::NativeTouchOutside | InputPath::NativeTouchCancel) {
++        assert!(layers.is_empty(), "outside/cancelled drag must not add a layer");
++    } else {
++        assert_eq!(layers.len(), 1, "drop must add one layer at {target}");
++        assert!(matches!(layers[0].source, LayerSource::Footage { item: id } if id == item));
++        harness.state_mut().session.execute("edit.undo", json!({})).unwrap();
++        assert!(harness.state().session.active_comp().unwrap().layers.is_empty(), "drop must remain one undoable editor command");
++    }
 +    drop(harness);
 +    let _ = std::fs::remove_dir_all(directory);
 +}
 +#[test]
-+fn imported_media_drag_to_composition_adds_one_editable_layer() { run_drop("viewer.comp"); }
++fn imported_media_drag_to_composition_adds_one_editable_layer() { run_drop("viewer.comp", InputPath::Mouse); }
 +#[test]
-+fn imported_media_drag_to_timeline_adds_one_editable_layer() { run_drop("timeline.empty"); }
++fn imported_media_drag_to_timeline_adds_one_editable_layer() { run_drop("timeline.empty", InputPath::Mouse); }
++
++#[test]
++fn native_touch_release_to_composition_adds_one_editable_layer() { run_drop("viewer.comp", InputPath::NativeTouch); }
++#[test]
++fn native_touch_release_to_timeline_adds_one_editable_layer() { run_drop("timeline.empty", InputPath::NativeTouch); }
++#[test]
++fn native_touch_outside_does_not_add_a_layer() { run_drop("timeline.empty", InputPath::NativeTouchOutside); }
++#[test]
++fn native_touch_cancel_does_not_add_a_layer() { run_drop("viewer.comp", InputPath::NativeTouchCancel); }
 diff --git a/apps/effectcraft-ios/src/native_documents.rs b/apps/effectcraft-ios/src/native_documents.rs
 new file mode 100644
 index 00000000..bb218957
@@ -5707,7 +5758,7 @@ index ae2294f1..7436fbe0 100644
                                  let pts: Vec<egui::Pos2> =
                                      poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
-index 163e6507..4c406941 100644
+index 163e6507..9720a102 100644
 --- a/crates/ui-egui/src/panels/timeline.rs
 +++ b/crates/ui-egui/src/panels/timeline.rs
 @@ -72,7 +72,7 @@ pub(crate) fn bar_color(label: Color32, selected: bool) -> Color32 {
@@ -5795,6 +5846,34 @@ index 163e6507..4c406941 100644
      }
      if let (Some(start), Some(end)) = (ctx.input(|i| i.pointer.press_origin()), outline_empty.interact_pointer_pos())
          && outline_empty.dragged()
+@@ -3324,9 +3375,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+     // comps from the Project panel and files from the Media Browser go where they are dropped: a
+     // line shows the place in the stack, and over the time graph a marker shows the In point too
+     // (Shift: at the current time).
++    // iPad indirect-pointer input ends with PointerGone in the release frame.
++    // interact_pos retains the release point; hover_pos has already disappeared.
+     if let Some(payload) = egui::DragAndDrop::payload::<crate::panels::DragPayload>(&ctx)
+         && !matches!(*payload, crate::panels::DragPayload::Property { .. })
+-        && let Some(ptr) = ctx.input(|i| i.pointer.hover_pos()).filter(|_| ui.rect_contains_pointer(rows_rect))
++        && let Some(ptr) = ctx.input(|i| i.pointer.interact_pos()).filter(|_| ui.rect_contains_pointer(rows_rect))
+     {
+         let released = ctx.input(|i| i.pointer.any_released());
+         if let crate::panels::DragPayload::Effect(e) = payload.as_ref() {
+diff --git a/crates/ui-egui/src/panels/viewer_drop.rs b/crates/ui-egui/src/panels/viewer_drop.rs
+index 2d42eb2c..c2a82b78 100644
+--- a/crates/ui-egui/src/panels/viewer_drop.rs
++++ b/crates/ui-egui/src/panels/viewer_drop.rs
+@@ -20,7 +20,9 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &egui::Ui, painter: &egui::Pain
+     if matches!(*payload, DragPayload::Property { .. }) {
+         return;
+     }
+-    let Some(ptr) = ctx.input(|i| i.pointer.hover_pos()).filter(|_| ui.rect_contains_pointer(map.area)) else { return };
++    // iPad indirect-pointer input ends with PointerGone in the release frame.
++    // interact_pos retains the release point; hover_pos has already disappeared.
++    let Some(ptr) = ctx.input(|i| i.pointer.interact_pos()).filter(|_| ui.rect_contains_pointer(map.area)) else { return };
+     let stroke = Stroke::new(2.0, app.tokens.accent);
+     let at = map.to_comp(ptr);
+     let actions: Vec<(&str, Value)> = match payload.as_ref() {
 diff --git a/xtask/src/main.rs b/xtask/src/main.rs
 index 4d541feb..c8af9c02 100644
 --- a/xtask/src/main.rs
