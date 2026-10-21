@@ -1917,7 +1917,7 @@ index 00000000..9441c9b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..589715cf
+index 00000000..a0922917
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
 @@ -0,0 +1,125 @@
@@ -1991,7 +1991,7 @@ index 00000000..589715cf
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => format!("EffectCraft · build 17. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
++                Ok(_) => format!("EffectCraft · build 19. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
