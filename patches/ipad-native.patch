@@ -5967,7 +5967,8 @@ index e79ac63a..1b391799 100644
 +    ("ios", 6),
  ];
  
- /// Allowed same-layer edges (from, to).\ndiff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
+ /// Allowed same-layer edges (from, to).
+diff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
 --- a/crates/engine/src/prefs.rs
 +++ b/crates/engine/src/prefs.rs
 @@ -631,7 +631,7 @@ impl Prefs {
