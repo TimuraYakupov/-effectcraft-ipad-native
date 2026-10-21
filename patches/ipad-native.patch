@@ -4939,7 +4939,7 @@ index 4140b792..a12fae71 100644
          let d = std::env::temp_dir().join(format!("effectcraft-disk-cache-{name}-{}", std::process::id()));
          let _ = std::fs::remove_dir_all(&d);
 diff --git a/crates/text/src/fonts.rs b/crates/text/src/fonts.rs
-index aeabf187..71c2c65a 100644
+index aeabf187..a08dc5ba 100644
 --- a/crates/text/src/fonts.rs
 +++ b/crates/text/src/fonts.rs
 @@ -339,10 +339,34 @@ pub fn add_font_data(data: Vec<u8>) -> Vec<FaceId> {
@@ -5017,7 +5017,7 @@ index aeabf187..71c2c65a 100644
          let i = f
              .info
              .instances
-@@ -1097,6 +1122,33 @@ mod tests {
+@@ -1097,6 +1122,34 @@ mod tests {
          assert_eq!(resolve("Inter", "Bold").instance, None);
      }
  
@@ -5038,7 +5038,8 @@ index aeabf187..71c2c65a 100644
 +            (FAMILY, "Bold", Some(900.0)),
 +            ("ECImportedInstance-Black", "", Some(900.0)),
 +            ("EffectCraft Imported Instance Test Black", "", Some(900.0)),
-+            ("ECImportedInstance-Light", "", None),
++            ("ECImportedInstance-Light", "", Some(300.0)),
++            (FAMILY, "Light", None),
 +        ] {
 +            let resolved = resolve(name, style);
 +            assert_eq!(resolved.face, replacement, "{name} / {style}");
