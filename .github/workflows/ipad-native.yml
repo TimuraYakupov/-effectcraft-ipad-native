@@ -25,7 +25,7 @@ jobs:
         run: |
           git init effectcraft
           git -C effectcraft remote add origin https://github.com/storytold/effectcraft.git
-          git -C effectcraft fetch --depth 1 origin de3fec28ed7a3d7a700a9d8ea307779dcda99a8e
+          git -C effectcraft fetch --depth 1 origin 26b40199b72121aa7f4e55a63718e1b4dd48a859
           git -C effectcraft checkout --detach FETCH_HEAD
           git -C effectcraft apply ../patches/ipad-native.patch
       - name: Install Rust
@@ -33,15 +33,24 @@ jobs:
       - name: Reproduce build 14 native media-drop regression
         working-directory: effectcraft
         run: python3 ../scripts/verify_touch_drop_regression.py
-      - name: Test native Bridge, fonts, input and timeline trimming
+      - name: Test native Bridge, input, settings and media drops
         working-directory: effectcraft
-        run: |
-          cargo +1.95.0 test --locked -p effectcraft-ios --features eframe/x11
-          cargo +1.95.0 test --locked -p effectcraft-text --lib
-          cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --test ui_timeline_trim
-          cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip h264_mp4_roundtrip
-          cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip movies_carry_audio
-          cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip image_sequences_roundtrip
+        run: cargo +1.95.0 test --locked -p effectcraft-ios --features eframe/x11
+      - name: Test fonts and text layout
+        working-directory: effectcraft
+        run: cargo +1.95.0 test --locked -p effectcraft-text --lib
+      - name: Test timeline trimming
+        working-directory: effectcraft
+        run: cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --test ui_timeline_trim
+      - name: Test H264 MP4 round trip
+        working-directory: effectcraft
+        run: cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip h264_mp4_roundtrip
+      - name: Test movie audio round trip
+        working-directory: effectcraft
+        run: cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip movies_carry_audio
+      - name: Test image sequence round trip
+        working-directory: effectcraft
+        run: cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip image_sequences_roundtrip
   uikit-keyboard:
     runs-on: macos-15
     timeout-minutes: 10
@@ -62,7 +71,7 @@ jobs:
         run: |
           git init effectcraft
           git -C effectcraft remote add origin https://github.com/storytold/effectcraft.git
-          git -C effectcraft fetch --depth 1 origin de3fec28ed7a3d7a700a9d8ea307779dcda99a8e
+          git -C effectcraft fetch --depth 1 origin 26b40199b72121aa7f4e55a63718e1b4dd48a859
           git -C effectcraft checkout --detach FETCH_HEAD
           git -C effectcraft apply --check ../patches/ipad-native.patch
           git -C effectcraft apply ../patches/ipad-native.patch

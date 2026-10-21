@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index ee9c99cf..e9259e2d 100644
+index 2cd7ed3a..4656f29b 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -1408,6 +1408,21 @@ dependencies = [
@@ -8,7 +8,7 @@ index ee9c99cf..e9259e2d 100644
  
 +[[package]]
 +name = "effectcraft-ios"
-+version = "0.13.0"
++version = "0.14.0"
 +dependencies = [
 + "cpal",
 + "effectcraft-engine",
@@ -23,7 +23,7 @@ index ee9c99cf..e9259e2d 100644
 +
  [[package]]
  name = "effectcraft-keyframe"
- version = "0.13.0"
+ version = "0.14.0"
 @@ -1693,6 +1708,7 @@ dependencies = [
   "effectcraft-gpu",
   "effectcraft-host",
@@ -389,7 +389,7 @@ index 00000000..7c34dae3
 +}
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..a9c0a059
+index 00000000..dcab4bf5
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
 @@ -0,0 +1,236 @@
@@ -478,7 +478,7 @@ index 00000000..a9c0a059
 +        if self.open {
 +            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +            let mut open = self.open;
-+            egui::Window::new("Diagnostics · build 18").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("Diagnostics · build 19").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
 +                ui.label(&self.keyboard.native_status);
 +                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
@@ -1917,7 +1917,7 @@ index 00000000..9441c9b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..dbd1befd
+index 00000000..589715cf
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
 @@ -0,0 +1,125 @@
@@ -1951,7 +1951,7 @@ index 00000000..dbd1befd
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=18 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
++    log::info!(target: "effectcraft_diagnostics", "build=19 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -2726,7 +2726,7 @@ index 00000000..e50c72a1
 +}
 diff --git a/apps/effectcraft-ios/src/settings.rs b/apps/effectcraft-ios/src/settings.rs
 new file mode 100644
-index 00000000..3a265bcd
+index 00000000..d3029ed2
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/settings.rs
 @@ -0,0 +1,96 @@
@@ -4575,6 +4575,28 @@ index 2c89466a..c4f55179 100644
      }
  }
  
+diff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
+index a2ce579e..0215222e 100644
+--- a/crates/engine/src/prefs.rs
++++ b/crates/engine/src/prefs.rs
+@@ -637,7 +637,7 @@ impl Prefs {
+             _ => {}
+         }
+         self.appearance.brightness = self.appearance.brightness.clamp(-1.0, 1.0);
+-        self.appearance.ui_scale = self.appearance.ui_scale.clamp(75, 200);
++        self.appearance.ui_scale = self.appearance.ui_scale.clamp(if cfg!(target_os = "ios") { 25 } else { 75 }, 200);
+         let defaults = default_labels();
+         self.labels.truncate(defaults.len());
+         for d in defaults.iter().skip(self.labels.len()) {
+@@ -1261,7 +1261,7 @@ pub fn pages() -> Vec<Page> {
+                 s("appearance.lightTheme", "Light Theme", Kind::Choice(LIGHT_THEMES), true),
+                 s("appearance.darkTheme", "Dark Theme", Kind::Choice(DARK_THEMES), true),
+                 s("appearance.brightness", "Brightness", Kind::Slider(-1.0, 1.0), true),
+-                s("appearance.uiScale", "UI Scale", Kind::Int(75, 200, "%"), true),
++                s("appearance.uiScale", "UI Scale", Kind::Int(if cfg!(target_os = "ios") { 25 } else { 75 }, 200, "%"), true),
+                 Section("Labels and Colors"),
+                 s("appearance.useLabelColorForHandles", "Use Label Color for Layer Handles and Paths", B, true),
+                 s("appearance.useLabelColorForTabs", "Use Label Color for Related Tabs", B, true),
 diff --git a/crates/engine/src/session_settings.rs b/crates/engine/src/session_settings.rs
 index ef3e748a..cb75223f 100644
 --- a/crates/engine/src/session_settings.rs
@@ -5968,22 +5990,3 @@ index e79ac63a..1b391799 100644
  ];
  
  /// Allowed same-layer edges (from, to).
-diff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
---- a/crates/engine/src/prefs.rs
-+++ b/crates/engine/src/prefs.rs
-@@ -631,6 +631,6 @@ impl Prefs {
-         }
-         self.appearance.brightness = self.appearance.brightness.clamp(-1.0, 1.0);
--        self.appearance.ui_scale = self.appearance.ui_scale.clamp(75, 200);
-+        self.appearance.ui_scale = self.appearance.ui_scale.clamp(if cfg!(target_os = "ios") { 25 } else { 75 }, 200);
-         let defaults = default_labels();
-         self.labels.truncate(defaults.len());
-         for d in defaults.iter().skip(self.labels.len()) {
-@@ -1234,6 +1234,6 @@ pub fn pages() -> Vec<Page> {
-                 s("appearance.darkTheme", "Dark Theme", Kind::Choice(DARK_THEMES), true),
-                 s("appearance.brightness", "Brightness", Kind::Slider(-1.0, 1.0), true),
--                s("appearance.uiScale", "UI Scale", Kind::Int(75, 200, "%"), true),
-+                s("appearance.uiScale", "UI Scale", Kind::Int(if cfg!(target_os = "ios") { 25 } else { 75 }, 200, "%"), true),
-                 Section("Labels and Colors"),
-                 s("appearance.useLabelColorForHandles", "Use Label Color for Layer Handles and Paths", B, true),
-                 s("appearance.useLabelColorForTabs", "Use Label Color for Related Tabs", B, true),

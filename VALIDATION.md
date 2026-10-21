@@ -295,3 +295,15 @@ media-drop fix, audio, recovery, 2 GiB RAM preview and icon are preserved.
 CI gates include the native frontend regression suite, real UIKit responder
 delivery, ARM64 device build and IPA packaging. Physical iPad behavior still
 requires device validation.
+
+## EffectCraft 0.14.0 iPad build 19
+
+Base: upstream v0.14.0, commit 26b40199b72121aa7f4e55a63718e1b4dd48a859.
+The iPad overlay is carried from build 18 (01356bfcf7538d5901e13e6d5ef6748dd7d03075),
+including the first-install display preferences and persistence regression test.
+Source workspace/lock and package metadata identify 0.14.0 / build 19.
+Native Files, AE ZIP, fonts, input, touch-release media drops, cache, audio,
+recovery and app identity remain integrated. CI reports the native frontend,
+text, timeline and media export checks separately, in addition to the UIKit
+simulator checks and ARM64 device compilation/packaging. Physical iPad behavior
+still requires device validation.

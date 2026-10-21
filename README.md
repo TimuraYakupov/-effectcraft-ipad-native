@@ -1,13 +1,13 @@
-# EffectCraft for iPad — build 18
+# EffectCraft for iPad — build 19
 
-A native ARM64 iPad editor built from EffectCraft 0.13.0, pinned at
-`de3fec28ed7a3d7a700a9d8ea307779dcda99a8e`. Rust/egui runs over Metal without a
+A native ARM64 iPad editor built from EffectCraft 0.14.0, pinned at
+`26b40199b72121aa7f4e55a63718e1b4dd48a859`. Rust/egui runs over Metal without a
 WebView. Builds run on GitHub Actions macOS runners; a local Mac is not required.
 
 ## Build and install
 
 Open Actions → Native iPad preview → the latest successful run. Download the
-EffectCraft-Native-Preview artifact and extract `EffectCraft-0.13.0-iPad-Build-18.ipa`.
+EffectCraft-Native-Preview artifact and extract `EffectCraft-0.14.0-iPad-Build-19.ipa`.
 This is an unsigned device build for the existing LiveContainer installation
 workflow. Keep the same app/container identity to retain projects and settings.
 It is not an App Store or TestFlight distribution.
@@ -99,3 +99,11 @@ picker, as those would regress previously tested iPad behavior.
 
 The CI gates must still pass before treating this as an installable build; the
 physical iPad display layout and smaller-scale usability are separate device tests.
+
+## Update to 0.14.0 — build 19
+
+Build 19 uses the upstream v0.14.0 engine, preserving build 18's first-install
+Small Screen layout, 25–200% iPad UI scale, and saved layouts and preferences.
+All existing native iPad integrations, 2 GiB RAM preview, disk cache, AE Bridge,
+fonts, files, input, audio, recovery and licensed app icon are retained.
+The bundle ID and cache migration marker remain stable for updating in place.
