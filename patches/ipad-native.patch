@@ -1,5 +1,5 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index 933e3295..8ac17577 100644
+index ee9c99cf..e9259e2d 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -1408,6 +1408,21 @@ dependencies = [
@@ -8,7 +8,7 @@ index 933e3295..8ac17577 100644
  
 +[[package]]
 +name = "effectcraft-ios"
-+version = "0.11.1"
++version = "0.13.0"
 +dependencies = [
 + "cpal",
 + "effectcraft-engine",
@@ -23,7 +23,7 @@ index 933e3295..8ac17577 100644
 +
  [[package]]
  name = "effectcraft-keyframe"
- version = "0.11.1"
+ version = "0.13.0"
 @@ -1693,6 +1708,7 @@ dependencies = [
   "effectcraft-gpu",
   "effectcraft-host",
@@ -389,7 +389,7 @@ index 00000000..7c34dae3
 +}
 diff --git a/apps/effectcraft-ios/src/diagnostics.rs b/apps/effectcraft-ios/src/diagnostics.rs
 new file mode 100644
-index 00000000..3e06e384
+index 00000000..a9c0a059
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/diagnostics.rs
 @@ -0,0 +1,236 @@
@@ -478,7 +478,7 @@ index 00000000..3e06e384
 +        if self.open {
 +            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +            let mut open = self.open;
-+            egui::Window::new("Diagnostics · build 16").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("Diagnostics · build 17").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
 +                ui.label(&self.keyboard.native_status);
 +                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
@@ -1917,7 +1917,7 @@ index 00000000..9441c9b2
 +}
 diff --git a/apps/effectcraft-ios/src/main.rs b/apps/effectcraft-ios/src/main.rs
 new file mode 100644
-index 00000000..e1c16831
+index 00000000..dbd1befd
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
 @@ -0,0 +1,118 @@
@@ -1951,7 +1951,7 @@ index 00000000..e1c16831
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=16 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
++    log::info!(target: "effectcraft_diagnostics", "build=17 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1991,7 +1991,7 @@ index 00000000..e1c16831
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
 +            let status = match session.execute("file.openDemoProject", json!({})) {
-+                Ok(_) => format!("EffectCraft · build 16. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
++                Ok(_) => format!("EffectCraft · build 17. RAM: {} MiB.", session.prefs.memory.preview_cache_mb),
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
@@ -3110,10 +3110,10 @@ index 6c30f9a5..ef49f78f 100644
  eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
  log = { workspace = true }
 diff --git a/apps/effectcraft-web/js/host.js b/apps/effectcraft-web/js/host.js
-index 3db6ad35..cd7e509c 100644
+index 5c438550..04d1c9a3 100644
 --- a/apps/effectcraft-web/js/host.js
 +++ b/apps/effectcraft-web/js/host.js
-@@ -685,3 +685,46 @@ export function showDeviceLost(message, kept) {
+@@ -723,3 +723,46 @@ export function showDeviceLost(message, kept) {
    box.append(title, text, detail, buttons);
    document.body.append(box);
  }
@@ -3919,7 +3919,7 @@ index 00000000..4cff78f8
 +  };
 +})();
 diff --git a/apps/effectcraft-web/web/index.html b/apps/effectcraft-web/web/index.html
-index 70ab93ff..19edc8a4 100644
+index 85049007..1de0c327 100644
 --- a/apps/effectcraft-web/web/index.html
 +++ b/apps/effectcraft-web/web/index.html
 @@ -38,11 +38,476 @@
@@ -4413,10 +4413,10 @@ index 70ab93ff..19edc8a4 100644
          let bytes;
          if (typeof fileOrUrl === "string") {
 diff --git a/crates/engine/src/commands/edit.rs b/crates/engine/src/commands/edit.rs
-index 422728ea..79b0c1cb 100644
+index 019d56d1..24442b71 100644
 --- a/crates/engine/src/commands/edit.rs
 +++ b/crates/engine/src/commands/edit.rs
-@@ -791,6 +791,7 @@ pub(crate) fn disk_stats(s: &mut Session, _: &Value) -> Result<Value> {
+@@ -805,6 +805,7 @@ pub(crate) fn disk_stats(s: &mut Session, _: &Value) -> Result<Value> {
          "misses": st.misses,
          "writes": st.writes,
          "evictions": st.evictions,
@@ -4939,10 +4939,10 @@ index 4140b792..a12fae71 100644
          let d = std::env::temp_dir().join(format!("effectcraft-disk-cache-{name}-{}", std::process::id()));
          let _ = std::fs::remove_dir_all(&d);
 diff --git a/crates/text/src/fonts.rs b/crates/text/src/fonts.rs
-index d555954c..493b9340 100644
+index aeabf187..71c2c65a 100644
 --- a/crates/text/src/fonts.rs
 +++ b/crates/text/src/fonts.rs
-@@ -336,10 +336,34 @@ pub fn add_font_data(data: Vec<u8>) -> Vec<FaceId> {
+@@ -339,10 +339,34 @@ pub fn add_font_data(data: Vec<u8>) -> Vec<FaceId> {
      let names = read_faces_bytes(&data);
      let mut d = db().write().unwrap_or_else(|e| e.into_inner());
      let ids = names.into_iter().map(|n| push(&mut d, info_from(n, FaceData::Shared(data.clone()), "user"))).collect();
@@ -4977,36 +4977,85 @@ index d555954c..493b9340 100644
  /// Held for a whole system scan: a concurrent caller waits for the complete list instead of
  /// returning early and resolving against a half-filled database.
  static SCAN: std::sync::Mutex<()> = std::sync::Mutex::new(());
-@@ -497,11 +521,11 @@ fn resolve_in(family: &str, style: &str) -> Option<Resolved> {
-     if fam.is_empty() {
-         return None;
+@@ -553,17 +577,17 @@ fn resolve_in(family: &str, style: &str) -> Option<Resolved> {
      }
+     let instance_named = |f: &Face, name: &str| f.info.instances.iter().position(|i| i.style.eq_ignore_ascii_case(name)).and_then(|i| u16::try_from(i).ok());
+     // A face's own style (a variable face's is its default instance) needs no axis values.
 -    if let Some(f) = fam.iter().find(|f| f.info.style.eq_ignore_ascii_case(style)) {
 +    if let Some(f) = fam.iter().rev().find(|f| f.info.style.eq_ignore_ascii_case(style)) {
-         return Some(Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false });
+         return Some(Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false, instance: None });
      }
+     // A named instance of a variable face (`Figtree` `Black`): that face at the instance's axis
+     // values, not the nearest static weight made bold synthetically.
+-    if let Some((f, i)) = fam.iter().find_map(|f| Some((f, instance_named(f, style)?))) {
++    if let Some((f, i)) = fam.iter().rev().find_map(|f| Some((f, instance_named(f, style)?))) {
+         return Some(Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false, instance: Some(i) });
+     }
+     // The nearest weight among the faces and the named instances.
      let (w, it) = style_wants(style);
--    let best = fam.iter().min_by_key(|f| {
-+    let best = fam.iter().rev().min_by_key(|f| {
-         let italic_pen = if f.info.italic == it { 0 } else { 1000 };
-         italic_pen + (f.info.weight as i32 - w as i32).unsigned_abs()
-     })?;
-@@ -518,8 +542,9 @@ fn resolve_by_name(name: &str) -> Option<Resolved> {
-     let faces = all_faces();
-     let f = faces
+-    let candidates = fam.iter().flat_map(|f| {
++    let candidates = fam.iter().rev().flat_map(|f| {
+         std::iter::once((f, None, f.info.weight, f.info.italic)).chain(
+             f.info
+                 .instances
+@@ -596,15 +620,16 @@ fn resolve_by_name(name: &str) -> Option<Resolved> {
+     };
+     if let Some(f) = faces
          .iter()
 +        .rev()
          .find(|f| f.info.postscript.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(name)))
--        .or_else(|| faces.iter().find(|f| f.info.full_name.eq_ignore_ascii_case(name)))?;
-+        .or_else(|| faces.iter().rev().find(|f| f.info.full_name.eq_ignore_ascii_case(name)))?;
-     Some(Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false })
- }
+-        .or_else(|| faces.iter().find(|f| f.info.full_name.eq_ignore_ascii_case(name)))
++        .or_else(|| faces.iter().rev().find(|f| f.info.full_name.eq_ignore_ascii_case(name)))
+     {
+         // A variable face's own name is its default instance's (`Figtree-Light`).
+         return Some(found(f, None));
+     }
+     // A named instance of a variable face, by its PostScript name (`Figtree-Black`, what After
+     // Effects scripts use) or its full name (`Figtree Black`).
+-    faces.iter().find_map(|f| {
++    faces.iter().rev().find_map(|f| {
+         let i = f
+             .info
+             .instances
+@@ -1097,6 +1122,33 @@ mod tests {
+         assert_eq!(resolve("Inter", "Bold").instance, None);
+     }
  
++    /// Imported replacements keep priority without losing 0.13's variable instances.
++    #[test]
++    fn imported_variable_font_replacement_keeps_instances() {
++        const FAMILY: &str = "EffectCraft Imported Instance Test";
++        let instances = [
++            ("Light", 300.0, Some("ECImportedInstance-Light")),
++            ("Black", 900.0, Some("ECImportedInstance-Black")),
++        ];
++        let bytes = crate::sfnt::test_font::variable(FAMILY, &instances, true);
++        let first = add_font_data(bytes.clone())[0];
++        let replacement = add_font_data(bytes)[0];
++        assert_ne!(first, replacement);
++        for (name, style, weight) in [
++            (FAMILY, "Black", Some(900.0)),
++            (FAMILY, "Bold", Some(900.0)),
++            ("ECImportedInstance-Black", "", Some(900.0)),
++            ("EffectCraft Imported Instance Test Black", "", Some(900.0)),
++            ("ECImportedInstance-Light", "", None),
++        ] {
++            let resolved = resolve(name, style);
++            assert_eq!(resolved.face, replacement, "{name} / {style}");
++            assert!(!resolved.missing && !resolved.synth_bold);
++            let expected: Vec<_> = weight.map(|w| ("wght".to_string(), w)).into_iter().collect();
++            assert_eq!(instance_variations(&resolved), expected);
++        }
++    }
++
+     /// Axis values set on the text win over the instance's; the others keep the instance's.
+     #[test]
+     fn explicit_variations_override_the_instance() {
 diff --git a/crates/text/src/layout.rs b/crates/text/src/layout.rs
-index c1503215..be6f1b4f 100644
+index 2e863d1a..ce708415 100644
 --- a/crates/text/src/layout.rs
 +++ b/crates/text/src/layout.rs
-@@ -1028,6 +1028,10 @@ pub fn layout_rich_uncached(text: &str, runs: &[(Range<usize>, TextStyle)], para
+@@ -1048,6 +1048,10 @@ pub fn layout_rich_uncached(text: &str, runs: &[(Range<usize>, TextStyle)], para
      lay
  }
  
@@ -5313,7 +5362,7 @@ index fb381cfd..9bd1cfb9 100644
      let (icon, mode) = match app.session.prefs.appearance.appearance_mode.as_str() {
          "auto" => (Icon::Monitor, tr("Sync with System")),
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 105a075e..ed423031 100644
+index 72016cc5..361c848e 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
 @@ -144,6 +144,13 @@ pub struct Hooks {
@@ -5330,7 +5379,7 @@ index 105a075e..ed423031 100644
      pub pick_files: Option<Box<dyn Fn(&[&str]) -> Vec<String>>>,
      pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
      pub pick_open_project: Option<Box<dyn Fn() -> Option<String>>>,
-@@ -1192,6 +1199,7 @@ impl EffectcraftApp {
+@@ -1194,6 +1201,7 @@ impl EffectcraftApp {
          };
          let mut queued = self.frames.inflight();
          let series = self.frame_series(cid, scale);
@@ -5338,7 +5387,7 @@ index 105a075e..ed423031 100644
          // The preview's position orders prefetch and eviction (#595).
          let playhead = plan.filter(|p| p.video).map(|p| frames::Playhead { series, cur, start: p.start, end: p.end, step: p.step, looping: p.looping });
          self.frames.set_playhead(playhead);
-@@ -1204,7 +1212,17 @@ impl EffectcraftApp {
+@@ -1206,7 +1214,17 @@ impl EffectcraftApp {
              let mut all = true;
              let n = (p.end - p.start) / p.step + 1;
              let fit = self.frames_that_fit(&c, scale);
@@ -5357,7 +5406,7 @@ index 105a075e..ed423031 100644
                  let mut cut = p;
                  (cut.start, cut.end) = (p.first, (p.first + (fit - 1) * p.step).min(p.end));
                  self.playback.plan = Some(cut);
-@@ -1214,7 +1232,8 @@ impl EffectcraftApp {
+@@ -1216,7 +1234,8 @@ impl EffectcraftApp {
              }
              let order: Vec<i64> = (0..n).filter_map(|k| p.frame_after(p.first, k)).collect();
              for f in order {
@@ -5367,7 +5416,7 @@ index 105a075e..ed423031 100644
                      continue;
                  }
                  all = false;
-@@ -1407,14 +1426,17 @@ impl EffectcraftApp {
+@@ -1409,14 +1428,17 @@ impl EffectcraftApp {
              return;
          }
          let cur = comp.frame_rate.frame_at(self.session.time()).clamp(wa, wb);
@@ -5388,7 +5437,7 @@ index 105a075e..ed423031 100644
              }
              pending = true;
 diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
-index 26a7b66f..81924376 100644
+index 92893dcb..2d343296 100644
 --- a/crates/ui-egui/src/menus.rs
 +++ b/crates/ui-egui/src/menus.rs
 @@ -12,6 +12,70 @@ use crate::dock::PanelKind;
@@ -5475,7 +5524,7 @@ index 26a7b66f..81924376 100644
      uic!("playback.ramPreview", "Preview (Numpad 0)", [], Some("Num0")),
      uic!("playback.preview.shiftSpacebar", "Preview (Shift+Spacebar)", [], Some("Shift+Space")),
      uic!("playback.preview.shiftNumpad0", "Preview (Shift+Numpad 0)", [], Some("Shift+Num0")),
-@@ -291,6 +360,25 @@ fn only_comp(p: &Value) -> Option<effectcraft_engine::project::ItemId> {
+@@ -310,6 +379,25 @@ fn only_comp(p: &Value) -> Option<effectcraft_engine::project::ItemId> {
  
  /// Execute a UI or engine command by id.
  pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
@@ -5501,7 +5550,7 @@ index 26a7b66f..81924376 100644
      if matches!(id, "effects.copyPresetsFolderPath" | "mediaBrowser.copySourcePath") {
          return frontend(app, ctx, id, params);
      }
-@@ -1572,6 +1660,10 @@ pub(crate) fn entry_checked(app: &EffectcraftApp, e: &MenuEntry) -> Option<bool>
+@@ -1606,6 +1694,10 @@ pub(crate) fn entry_checked(app: &EffectcraftApp, e: &MenuEntry) -> Option<bool>
  }
  
  pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
@@ -5512,7 +5561,7 @@ index 26a7b66f..81924376 100644
      if app.ui.focused == PanelKind::Project {
          match e.command.as_str() {
              "edit.duplicate" => {
-@@ -1600,7 +1692,7 @@ pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
+@@ -1634,7 +1726,7 @@ pub(crate) fn entry_enabled(app: &EffectcraftApp, e: &MenuEntry) -> bool {
  
  /// Every menu entry, flattened with its submenu path.
  pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
@@ -5521,7 +5570,7 @@ index 26a7b66f..81924376 100644
          .into_iter()
          .map(|(path, e)| MenuItem {
              id: e.command.clone(),
-@@ -1610,8 +1702,22 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
+@@ -1644,8 +1736,22 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
              enabled: entry_enabled(app, e),
              checked: entry_checked(app, e),
              params: e.params.clone(),
@@ -5546,7 +5595,7 @@ index 26a7b66f..81924376 100644
  }
  
  /// Shortcut text in this OS's notation (`⇧⌘K` on macOS, `Ctrl+Shift+K` elsewhere).
-@@ -1999,7 +2105,10 @@ pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
+@@ -2033,7 +2139,10 @@ pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
                  if let MenuNode::Submenu { label, children } = node {
                      let r = ui.menu_button(crate::i18n::label(app, "", label), |ui| {
                          ui.set_min_width(if label == "Effect" { 200.0 } else { 280.0 });
@@ -5558,7 +5607,7 @@ index 26a7b66f..81924376 100644
                      });
                      nav.top(&r.response);
                      app.auto.add(&format!("menu.{label}"), r.response.rect, label);
-@@ -2022,7 +2131,8 @@ pub(crate) fn menu_contents(app: &mut EffectcraftApp, ui: &mut egui::Ui, name: &
+@@ -2056,7 +2165,8 @@ pub(crate) fn menu_contents(app: &mut EffectcraftApp, ui: &mut egui::Ui, name: &
      if let Some(MenuNode::Submenu { children, .. }) =
          effectcraft_engine::menus::menu_bar().iter().find(|n| matches!(n, MenuNode::Submenu { label, .. } if label == name))
      {
@@ -5568,7 +5617,7 @@ index 26a7b66f..81924376 100644
      }
      clicked.map(|(id, params)| (id, if params.is_null() { json!({}) } else { params }))
  }
-@@ -2122,7 +2232,7 @@ pub(crate) fn submenu_at(app: &mut EffectcraftApp, ui: &mut egui::Ui, path: &[&s
+@@ -2156,7 +2266,7 @@ pub(crate) fn submenu_at(app: &mut EffectcraftApp, ui: &mut egui::Ui, path: &[&s
  }
  
  /// The menu bar's entry for `command` in a panel's context menu (see [`submenu_at`]).
@@ -5577,7 +5626,7 @@ index 26a7b66f..81924376 100644
      if let Some((_, e)) = effectcraft_engine::menus::entries().into_iter().find(|(_, e)| e.command == command)
          && menu_entry(app, ui, e).clicked()
      {
-@@ -2142,7 +2252,7 @@ fn gutter(checked: bool) -> egui::Atom<'static> {
+@@ -2176,7 +2286,7 @@ fn gutter(checked: bool) -> egui::Atom<'static> {
      (if checked { "✔" } else { "" }).atom_size(egui::vec2(14.0, 14.0))
  }
  
@@ -5586,7 +5635,7 @@ index 26a7b66f..81924376 100644
      let (label, check, enabled) = (entry_label(app, e), gutter(entry_checked(app, e) == Some(true)), entry_enabled(app, e));
      // Edit ▸ Label's entries show the label's colour before its name.
      if e.command == "edit.label"
-@@ -2150,13 +2260,16 @@ fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::R
+@@ -2184,13 +2294,16 @@ fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::R
      {
          let out = ui.add_enabled_ui(enabled, |ui| egui::Button::new((check, crate::widgets::label_swatch(), label)).atom_ui(ui)).inner;
          crate::widgets::paint_label_swatch(ui, &out, l, &app.tokens);
@@ -5604,7 +5653,7 @@ index 26a7b66f..81924376 100644
  }
  
  /// View ▸ Zoom In / Zoom Out: the next standard magnification (as a share of screen pixels, so
-@@ -2212,6 +2325,53 @@ mod tests {
+@@ -2246,6 +2359,53 @@ mod tests {
          assert_eq!(starts, vec![Some(egui::Modifiers::SHIFT), Some(egui::Modifiers::SHIFT)]);
      }
  
@@ -5705,10 +5754,10 @@ index e07efe69..a1fceb27 100644
  mod tests {
      #[test]
 diff --git a/crates/ui-egui/src/panels/text_panels.rs b/crates/ui-egui/src/panels/text_panels.rs
-index ae2294f1..7436fbe0 100644
+index b3791efb..999d4940 100644
 --- a/crates/ui-egui/src/panels/text_panels.rs
 +++ b/crates/ui-egui/src/panels/text_panels.rs
-@@ -593,6 +593,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+@@ -596,6 +596,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
          )
      });
      let preview = app.session.prefs.type_.font_preview;
@@ -5716,7 +5765,7 @@ index ae2294f1..7436fbe0 100644
      let t = app.tokens;
      // The Variable Fonts filter (After Effects 26.3) stays as set while the app runs, like the
      // menu's other settings; the search query resets on every open.
-@@ -626,7 +627,8 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+@@ -629,7 +630,8 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
      widgets::note_open_popup_list(ui.ctx());
      let area = egui::Area::new(id.with("area")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(anchor).show(ui.ctx(), |ui| {
          egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -5726,7 +5775,7 @@ index ae2294f1..7436fbe0 100644
              // Filter row: a checkbox that keeps only the variable fonts.
              let filter_h = 22.0;
              let row = ui.add_sized([ui.available_width(), filter_h], egui::Button::selectable(false, ""));
-@@ -696,13 +698,10 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+@@ -699,13 +701,10 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
                      let resp = ui.add_sized([row_width, 24.0], egui::Button::selectable(index == state.selected, ""));
                      resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), index == state.selected, &r.display));
                      let label_rect = Rect::from_min_size(resp.rect.min + vec2(5.0, 0.0), vec2(label_width - 5.0, resp.rect.height()));
@@ -5744,7 +5793,7 @@ index ae2294f1..7436fbe0 100644
                      if ui.is_rect_visible(resp.rect) {
                          app.auto.add(&format!("{auto}.option.{}", r.family), resp.rect, &r.display);
                      }
-@@ -710,7 +709,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+@@ -713,7 +712,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
                          resp.scroll_to_me(None);
                      }
                      if preview && ui.is_rect_visible(resp.rect) {
@@ -5753,7 +5802,7 @@ index ae2294f1..7436fbe0 100644
                          let lines: std::sync::Arc<Vec<Vec<[f32; 2]>>> = match ui.data(|d| d.get_temp(key)) {
                              Some(l) => l,
                              None => {
-@@ -722,7 +721,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
+@@ -725,7 +724,7 @@ pub(super) fn font_picker(app: &mut EffectcraftApp, ui: &mut egui::Ui, id: egui:
                          // Scaled and placed to fit the row's preview column, and clipped to the row (#577).
                          let room = Rect::from_min_max(pos2(resp.rect.max.x - 95.0, resp.rect.min.y + 1.0), pos2(resp.rect.max.x - 6.0, resp.rect.max.y - 1.0));
                          if let Some((k, o)) = fit_preview(&lines, room, resp.rect.center().y + 5.0) {
@@ -5763,7 +5812,7 @@ index ae2294f1..7436fbe0 100644
                                  let pts: Vec<egui::Pos2> =
                                      poly.iter().filter(|p| p[0].is_finite() && p[1].is_finite()).map(|p| (o + vec2(p[0], p[1]) * k).to_pos2()).collect();
 diff --git a/crates/ui-egui/src/panels/timeline.rs b/crates/ui-egui/src/panels/timeline.rs
-index aff4ef2c..177c826d 100644
+index b34fbd9d..bc75a813 100644
 --- a/crates/ui-egui/src/panels/timeline.rs
 +++ b/crates/ui-egui/src/panels/timeline.rs
 @@ -72,7 +72,7 @@ pub(crate) fn bar_color(label: Color32, selected: bool) -> Color32 {
@@ -5775,7 +5824,7 @@ index aff4ef2c..177c826d 100644
  
  /// A layer bar's body (drag to move) and its In/Out trim zones. Short bars keep their middle
  /// third as body; a bar too short for that is all trim zones (the Out one on top).
-@@ -2308,6 +2308,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -2317,6 +2317,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                      let body = ui.interact(body_r, egui::Id::new(("bar", layer.id.0)), Sense::click_and_drag());
                      let lin = ui.interact(in_r, egui::Id::new(("bar-in", layer.id.0)), Sense::drag());
                      let lout = ui.interact(out_r, egui::Id::new(("bar-out", layer.id.0)), Sense::drag());
@@ -5794,7 +5843,7 @@ index aff4ef2c..177c826d 100644
                      app.auto.add(&format!("timeline.layer.{}.bar.in", layer.id.0), in_r, "Trim In");
                      app.auto.add(&format!("timeline.layer.{}.bar.out", layer.id.0), out_r, "Trim Out");
                      if lin.hovered() || lout.hovered() || lin.dragged() || lout.dragged() {
-@@ -2763,8 +2775,46 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -2772,8 +2784,46 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                  let is_tr_rot = layer.transform().and_then(|t| t.get("rotation")).is_some_and(|r| r.uid == prop.uid);
                  let base = if is_tr_rot && prop.name == "Rotation" && layer.is_3d() { "Z Rotation".to_string() } else { prop.name.clone() };
                  let pname = if prop.has_expression() { format!("{base}  =") } else { base };
@@ -5843,7 +5892,7 @@ index aff4ef2c..177c826d 100644
                  let name_resp = ui.interact(name_rect, egui::Id::new(("pname", uid)), Sense::click_and_drag());
                  app.auto.add(&format!("timeline.prop.{uid}.name"), name_rect, &prop.name);
                  if name_resp.drag_started() {
-@@ -3002,6 +3052,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -3011,6 +3061,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
      }
      if outline_empty.clicked() && !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
          actions.push(("layer.select".into(), json!({"layers": []})));
@@ -5851,7 +5900,7 @@ index aff4ef2c..177c826d 100644
      }
      if let (Some(start), Some(end)) = (ctx.input(|i| i.pointer.press_origin()), outline_empty.interact_pointer_pos())
          && outline_empty.dragged()
-@@ -3341,9 +3392,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
+@@ -3351,9 +3402,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
      // comps from the Project panel and files from the Media Browser go where they are dropped: a
      // line shows the place in the stack, and over the time graph a marker shows the In point too
      // (Shift: at the current time).
@@ -5863,9 +5912,9 @@ index aff4ef2c..177c826d 100644
 +        && let Some(ptr) = ctx.input(|i| i.pointer.interact_pos()).filter(|_| ui.rect_contains_pointer(rows_rect))
      {
          let released = ctx.input(|i| i.pointer.any_released());
-         if let crate::panels::DragPayload::Effect(e) = payload.as_ref() {
+         if matches!(payload.as_ref(), crate::panels::DragPayload::Effect(_) | crate::panels::DragPayload::Preset { .. }) {
 diff --git a/crates/ui-egui/src/panels/viewer_drop.rs b/crates/ui-egui/src/panels/viewer_drop.rs
-index 2d42eb2c..c2a82b78 100644
+index 44364a49..123b27e5 100644
 --- a/crates/ui-egui/src/panels/viewer_drop.rs
 +++ b/crates/ui-egui/src/panels/viewer_drop.rs
 @@ -20,7 +20,9 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &egui::Ui, painter: &egui::Pain

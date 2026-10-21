@@ -283,3 +283,15 @@ and touch-backed media drag/drop. UIKit responder smoke and real ARM64 iOS
 release packaging remain CI gates. Physical iPad playback, imports, export and
 mouse validation remain device checks; updating the engine is not evidence of
 those device behaviors.
+
+## EffectCraft 0.13.0 iPad build 17
+
+Base: upstream v0.13.0, commit de3fec28ed7a3d7a700a9d8ea307779dcda99a8e.
+The full iPad overlay is rebased onto the release. Font resolution retains
+upstream variable-font instances and metric-compatible fallbacks while keeping
+newly imported faces preferred for matching names and styles.
+The app identity, cache migration marker, Files and AE bridge, input routing,
+media-drop fix, audio, recovery, 2 GiB RAM preview and icon are preserved.
+CI gates include the native frontend regression suite, real UIKit responder
+delivery, ARM64 device build and IPA packaging. Physical iPad behavior still
+requires device validation.
