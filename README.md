@@ -1,4 +1,4 @@
-# EffectCraft for iPad — build 17
+# EffectCraft for iPad — build 18
 
 A native ARM64 iPad editor built from EffectCraft 0.13.0, pinned at
 `de3fec28ed7a3d7a700a9d8ea307779dcda99a8e`. Rust/egui runs over Metal without a
@@ -7,7 +7,7 @@ WebView. Builds run on GitHub Actions macOS runners; a local Mac is not required
 ## Build and install
 
 Open Actions → Native iPad preview → the latest successful run. Download the
-EffectCraft-Native-Preview artifact and extract `EffectCraft-0.13.0-iPad-Build-17.ipa`.
+EffectCraft-Native-Preview artifact and extract `EffectCraft-0.13.0-iPad-Build-18.ipa`.
 This is an unsigned device build for the existing LiveContainer installation
 workflow. Keep the same app/container identity to retain projects and settings.
 It is not an App Store or TestFlight distribution.
@@ -78,3 +78,24 @@ commands all retain their menu dispatch. No UIKit touch interception is added.
 
 The 0.13.0 variable-font named instances and metric-compatible font fallbacks
 coexist with imported-font priority and Character cache refresh.
+
+## Build 18 — selective upstream UIKit improvements
+
+Build 18 adopts two low-risk display ideas from the contributor's native iOS
+port ([upstream PR #1401](https://github.com/storytold/effectcraft/pull/1401)):
+
+- **Small Screen** workspace on first launch, to provide a compact Project /
+  Composition / Preview / Timeline layout. Existing user layouts are preserved.
+- Native iOS **UI Scale 25–200%**, with 60% as the first-install preference.
+  Existing installs retain their selected scale, and desktop versions continue
+  to use their original 75–200% range.
+
+The shared engine is still EffectCraft **0.13.0**. The LiveContainer bundle ID,
+2 GiB RAM-preview budget, disk caching, keyboard/mouse and native media-drop fix,
+Files + AE ZIP bridge, imports, autosave, native audio and existing icon remain
+unchanged. We deliberately did **not** import the contributor port's 256 MiB
+preview ceiling, its alternative keyboard implementation, or its different file
+picker, as those would regress previously tested iPad behavior.
+
+The CI gates must still pass before treating this as an installable build; the
+physical iPad display layout and smaller-scale usability are separate device tests.
