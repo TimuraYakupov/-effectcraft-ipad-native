@@ -5971,7 +5971,7 @@ index e79ac63a..1b391799 100644
 diff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
 --- a/crates/engine/src/prefs.rs
 +++ b/crates/engine/src/prefs.rs
-@@ -631,7 +631,7 @@ impl Prefs {
+@@ -631,6 +631,6 @@ impl Prefs {
          }
          self.appearance.brightness = self.appearance.brightness.clamp(-1.0, 1.0);
 -        self.appearance.ui_scale = self.appearance.ui_scale.clamp(75, 200);
@@ -5979,7 +5979,7 @@ diff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
          let defaults = default_labels();
          self.labels.truncate(defaults.len());
          for d in defaults.iter().skip(self.labels.len()) {
-@@ -1234,7 +1234,7 @@ pub fn pages() -> Vec<Page> {
+@@ -1234,6 +1234,6 @@ pub fn pages() -> Vec<Page> {
                  s("appearance.darkTheme", "Dark Theme", Kind::Choice(DARK_THEMES), true),
                  s("appearance.brightness", "Brightness", Kind::Slider(-1.0, 1.0), true),
 -                s("appearance.uiScale", "UI Scale", Kind::Int(75, 200, "%"), true),
