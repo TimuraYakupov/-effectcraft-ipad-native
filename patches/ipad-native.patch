@@ -1920,7 +1920,7 @@ new file mode 100644
 index 00000000..dbd1befd
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/main.rs
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,125 @@
 +//! First native iPad smoke prototype. UIKit lifecycle is owned by winit;
 +//! eframe and the compositor share a Metal device; the Rust editor runs without a WebView.
 +#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -1951,7 +1951,7 @@ index 00000000..dbd1befd
 +    effectcraft_engine::logging::install_panic_hook();
 +    let directory = journal::log_directory();
 +    let startup_error = effectcraft_engine::logging::attach_session_log(&directory).err();
-+    log::info!(target: "effectcraft_diagnostics", "build=17 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
++    log::info!(target: "effectcraft_diagnostics", "build=18 startup workers=1 preview_mib=2048 disk_gib=1 hardware_keyboard=responder_chain");
 +    let mut graphics = eframe::WgpuConfiguration::default();
 +    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut graphics.wgpu_setup {
 +        setup.instance_descriptor.backends = eframe::wgpu::Backends::METAL;
@@ -1986,7 +1986,7 @@ index 00000000..dbd1befd
 +                log::warn!("User font restore: {error}");
 +            }
 +            let mut session = effectcraft_host::session();
-+            settings::configure(&mut session, &bridge::documents());
++            let fresh_install = settings::configure(&mut session, &bridge::documents());
 +            let recovery = session.begin_recovery();
 +            // This first build is for graphics/touch verification only. Use the bundled,
 +            // openly licensed synthetic project; no private files are embedded.
@@ -1995,6 +1995,13 @@ index 00000000..dbd1befd
 +                Err(error) => format!("Could not open the demo: {error}"),
 +            };
 +            let mut app = EffectcraftApp::new(session);
++            if fresh_install {
++                // Follow the upstream UIKit port: make room for Timeline and panels
++                // on a tablet without changing anyone\'s saved workspace.
++                app.ui.workspace = "Small Screen".into();
++                app.ui.dock = effectcraft_ui_egui::dock::workspace("Small Screen");
++            }
++            app.apply_prefs(&cc.egui_ctx);
 +            if let Some(recovery) = recovery { app.offer_recovery(recovery); }
 +            #[cfg(target_os = "ios")]
 +            {
@@ -2722,17 +2729,22 @@ new file mode 100644
 index 00000000..3a265bcd
 --- /dev/null
 +++ b/apps/effectcraft-ios/src/settings.rs
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,96 @@
 +//! Stable settings and recovery storage, including LiveContainer upgrades.
 +use std::{path::Path, sync::Arc};
 +use effectcraft_engine::{Session, config::DirConfig};
 +
-+pub fn configure(session: &mut Session, documents: &Path) {
++pub fn configure(session: &mut Session, documents: &Path) -> bool {
 +    let settings = documents.join("Settings");
 +    let first_launch = !settings.join(effectcraft_engine::prefs::PREFS_FILE).is_file();
 +    session.config = Some(Arc::new(DirConfig::new(settings)));
 +    session.load_settings();
 +    if first_launch {
++        // Native UI scale can be 25–200% (upstream iOS port). Keep existing
++        // users' preferences unchanged, including their chosen larger scale.
++        if cfg!(target_os = "ios") {
++            session.prefs.appearance.ui_scale = 60;
++        }
 +        session.prefs.memory.layer_cache_mb = 64;
 +        session.prefs.memory.media_cache_mb = 64;
 +        session.prefs.memory.preview_cache_mb = 2048;
@@ -2757,11 +2769,26 @@ index 00000000..3a265bcd
 +    if let Some(config) = &session.config {
 +        if let Err(error) = config.write("ipad-preview-cache-v13", "2048") { log::warn!("Cache preference migration: {error}"); }
 +    }
++    first_launch
 +}
 +
 +#[cfg(test)]
 +mod tests {
 +    use super::*;
++    #[test]
++    fn fresh_install_sets_mobile_scale_without_overwriting_existing_choices() {
++        let root = std::env::temp_dir().join(format!("ec-ipad-display-{}", std::process::id()));
++        let _ = std::fs::remove_dir_all(&root);
++        let mut fresh = Session::default();
++        assert!(configure(&mut fresh, &root));
++        assert_eq!(fresh.prefs.appearance.ui_scale, if cfg!(target_os = "ios") { 60 } else { 100 });
++        fresh.prefs.appearance.ui_scale = 90;
++        fresh.save_prefs();
++        let mut existing = Session::default();
++        assert!(!configure(&mut existing, &root));
++        assert_eq!(existing.prefs.appearance.ui_scale, 90);
++        let _ = std::fs::remove_dir_all(&root);
++    }
 +    #[test]
 +    fn upgrade_applies_two_gib_once_and_keeps_later_choice() {
 +        let root = std::env::temp_dir().join(format!("ec-cache-upgrade-{}", std::process::id()));
@@ -5941,3 +5968,23 @@ index e79ac63a..1b391799 100644
  ];
  
  /// Allowed same-layer edges (from, to).
+
+diff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
+--- a/crates/engine/src/prefs.rs
++++ b/crates/engine/src/prefs.rs
+@@ -631,7 +631,7 @@ impl Prefs {
+         }
+         self.appearance.brightness = self.appearance.brightness.clamp(-1.0, 1.0);
+-        self.appearance.ui_scale = self.appearance.ui_scale.clamp(75, 200);
++        self.appearance.ui_scale = self.appearance.ui_scale.clamp(if cfg!(target_os = "ios") { 25 } else { 75 }, 200);
+         let defaults = default_labels();
+         self.labels.truncate(defaults.len());
+         for d in defaults.iter().skip(self.labels.len()) {
+@@ -1234,7 +1234,7 @@ pub fn pages() -> Vec<Page> {
+                 s("appearance.darkTheme", "Dark Theme", Kind::Choice(DARK_THEMES), true),
+                 s("appearance.brightness", "Brightness", Kind::Slider(-1.0, 1.0), true),
+-                s("appearance.uiScale", "UI Scale", Kind::Int(75, 200, "%"), true),
++                s("appearance.uiScale", "UI Scale", Kind::Int(if cfg!(target_os = "ios") { 25 } else { 75 }, 200, "%"), true),
+                 Section("Labels and Colors"),
+                 s("appearance.useLabelColorForHandles", "Use Label Color for Layer Handles and Paths", B, true),
+                 s("appearance.useLabelColorForTabs", "Use Label Color for Related Tabs", B, true),
