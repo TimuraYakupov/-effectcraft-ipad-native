@@ -478,7 +478,7 @@ index 00000000..a9c0a059
 +        if self.open {
 +            ctx.request_repaint_after(std::time::Duration::from_millis(100));
 +            let mut open = self.open;
-+            egui::Window::new("Diagnostics · build 17").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
++            egui::Window::new("Diagnostics · build 18").open(&mut open).default_width(650.0).vscroll(true).show(ctx, |ui| {
 +                ui.strong("Hardware keyboard — press Space here to test (project commands disabled)");
 +                ui.label(&self.keyboard.native_status);
 +                ui.label(format!("Editor received: {} · {}", self.keyboard.received, self.keyboard.last_key));
@@ -5967,9 +5967,7 @@ index e79ac63a..1b391799 100644
 +    ("ios", 6),
  ];
  
- /// Allowed same-layer edges (from, to).
-
-diff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
+ /// Allowed same-layer edges (from, to).\ndiff --git a/crates/engine/src/prefs.rs b/crates/engine/src/prefs.rs
 --- a/crates/engine/src/prefs.rs
 +++ b/crates/engine/src/prefs.rs
 @@ -631,7 +631,7 @@ impl Prefs {
