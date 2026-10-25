@@ -50,7 +50,7 @@ class PackagingTests(unittest.TestCase):
             prefix = "Payload/EffectCraftNative.app/"
             info = plistlib.loads(archive.read(prefix + "Info.plist"))
             self.assertEqual(info["CFBundleIdentifier"], "com.effectcraft.ipad.nativepreview")
-            self.assertEqual(info["CFBundleVersion"], "19")
+            self.assertEqual(info["CFBundleVersion"], "20")
             self.assertEqual(info["CFBundleShortVersionString"], "0.17.0")
             self.assertEqual(info["CFBundleDisplayName"], "EffectCraft")
             self.assertEqual(info["CFBundleName"], "EffectCraft")
