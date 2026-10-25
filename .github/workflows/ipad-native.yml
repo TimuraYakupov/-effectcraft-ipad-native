@@ -43,7 +43,7 @@ jobs:
         run: cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --lib velocity_multiselection_tests
       - name: Test timeline trimming
         working-directory: effectcraft
-        run: cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --test it ui_timeline_trim::
+        run: cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --test it ui_timeline_trim
       - name: Test H264 MP4 round trip
         working-directory: effectcraft
         run: cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip h264_mp4_roundtrip
