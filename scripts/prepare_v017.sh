@@ -25,6 +25,7 @@ git -C effectcraft -c user.name="EffectCraft iPad CI" -c user.email="effectcraft
 # reduced_still conditional from the 0.14 merge.
 git -C effectcraft show "${NEW}:crates/media/src/pool.rs" > effectcraft/crates/media/src/pool.rs
 python3 scripts/fix_velocity_selection.py effectcraft
+python3 scripts/fix_v017_merge_compat.py effectcraft
 # Workspace packages grew since v0.14; make the lockfile consistent instead
 # of copying outdated 0.14 package metadata into a 0.17 binary.
 git -C effectcraft status --short
