@@ -23,13 +23,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Prepare pinned source
         run: |
-          git init effectcraft
-          git -C effectcraft remote add origin https://github.com/storytold/effectcraft.git
-          git -C effectcraft fetch --depth 1 origin 26b40199b72121aa7f4e55a63718e1b4dd48a859
-          git -C effectcraft checkout --detach FETCH_HEAD
-          git -C effectcraft apply ../patches/ipad-native.patch
+          bash scripts/prepare_v017.sh
       - name: Install Rust
         run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Update iOS workspace lockfile for 0.17.0
+        working-directory: effectcraft
+        run: cargo +1.95.0 update --workspace
       - name: Reproduce build 14 native media-drop regression
         working-directory: effectcraft
         run: python3 ../scripts/verify_touch_drop_regression.py
@@ -69,16 +68,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Prepare pinned source
         run: |
-          git init effectcraft
-          git -C effectcraft remote add origin https://github.com/storytold/effectcraft.git
-          git -C effectcraft fetch --depth 1 origin 26b40199b72121aa7f4e55a63718e1b4dd48a859
-          git -C effectcraft checkout --detach FETCH_HEAD
-          git -C effectcraft apply --check ../patches/ipad-native.patch
-          git -C effectcraft apply ../patches/ipad-native.patch
+          bash scripts/prepare_v017.sh
       - name: Install Rust
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup target add --toolchain 1.95.0 aarch64-apple-ios
+      - name: Update iOS workspace lockfile for 0.17.0
+        working-directory: effectcraft
+        run: cargo +1.95.0 update --workspace
       - name: Locate iOS SDK
         run: |
           xcodebuild -version
