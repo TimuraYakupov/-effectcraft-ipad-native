@@ -46,13 +46,13 @@ jobs:
         run: cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --test it ui_timeline_trim
       - name: Test H264 MP4 round trip
         working-directory: effectcraft
-        run: cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip h264_mp4_roundtrip
+        run: cargo +1.95.0 test --locked -p effectcraft-export --test it h264_mp4_roundtrip
       - name: Test movie audio round trip
         working-directory: effectcraft
-        run: cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip movies_carry_audio
+        run: cargo +1.95.0 test --locked -p effectcraft-export --test it movies_carry_audio
       - name: Test image sequence round trip
         working-directory: effectcraft
-        run: cargo +1.95.0 test --locked -p effectcraft-export --test roundtrip image_sequences_roundtrip
+        run: cargo +1.95.0 test --locked -p effectcraft-export --test it image_sequences_roundtrip
   uikit-keyboard:
     runs-on: macos-15
     timeout-minutes: 10
