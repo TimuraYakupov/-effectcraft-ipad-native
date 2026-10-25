@@ -1,13 +1,12 @@
-# EffectCraft for iPad — build 19
+# EffectCraft for iPad — build 20
 
-A native ARM64 iPad editor built from EffectCraft 0.14.0, pinned at
-`26b40199b72121aa7f4e55a63718e1b4dd48a859`. Rust/egui runs over Metal without a
+A native ARM64 iPad editor built from upstream EffectCraft 0.17.0 (`362474a843ddb67555d4c2d19ad6a590388aad0e`), with\nthe previously validated build 19 iPad overlay three-way merged. Rust/egui runs over Metal without a
 WebView. Builds run on GitHub Actions macOS runners; a local Mac is not required.
 
 ## Build and install
 
 Open Actions → Native iPad preview → the latest successful run. Download the
-EffectCraft-Native-Preview artifact and extract `EffectCraft-0.14.0-iPad-Build-19.ipa`.
+EffectCraft-Native-Preview artifact and extract `EffectCraft-0.17.0-iPad-Build-20.ipa`.
 This is an unsigned device build for the existing LiveContainer installation
 workflow. Keep the same app/container identity to retain projects and settings.
 It is not an App Store or TestFlight distribution.
@@ -107,3 +106,21 @@ Small Screen layout, 25–200% iPad UI scale, and saved layouts and preferences.
 All existing native iPad integrations, 2 GiB RAM preview, disk cache, AE Bridge,
 fonts, files, input, audio, recovery and licensed app icon are retained.
 The bundle ID and cache migration marker remain stable for updating in place.
+
+## EffectCraft 0.17.0 — build 20
+
+The source-preparation script merges the native iPad overlay (based on 0.14.0)
+onto the actual upstream v0.17.0 commit. This is a source upgrade, not a bundle
+version rename. Any upstream merge conflicts prefer the v0.17.0 implementation;
+regression builds must verify that platform integrations still compile and work.
+
+**Keyframe Velocity multi-selection fix:** The dialog no longer checks only the
+first selected keyframe for the incoming/outgoing handle. If any selected key has
+an eligible incoming or outgoing handle, that entire side can be edited and the
+command changes both sides in one undoable operation. Endpoints without a segment
+are not used as the source of the initial values. Unit tests reproduce the
+first-key-is-an-endpoint failure and assert that both sides remain available.
+
+The existing native file service, UIKit keyboard/mouse handling, touch release
+drop fix, 2 GiB memory preview, disk cache, fonts, audio, and LiveContainer bundle
+identity should be preserved, subject to CI and physical iPad validation.

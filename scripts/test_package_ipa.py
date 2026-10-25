@@ -17,7 +17,7 @@ class PackagingTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.binary = self.root / "effectcraft/target/aarch64-apple-ios/release/effectcraft-ios"
         self.binary.parent.mkdir(parents=True)
-        (self.root / "effectcraft/Cargo.toml").write_text('[workspace.package]\nversion = "0.14.0"\n')
+        (self.root / "effectcraft/Cargo.toml").write_text('[workspace.package]\nversion = "0.17.0"\n')
         self.binary.write_bytes(struct.pack("<8I", 0xFEEDFACF, 0x0100000C, 0, 2, 0, 0, 0, 0))
         icon = self.root / "effectcraft/assets/app-icon"
         icon.mkdir(parents=True)
@@ -28,7 +28,7 @@ class PackagingTests(unittest.TestCase):
 
     def test_rejects_mislabeled_source(self):
         (self.root / "effectcraft/Cargo.toml").write_text('[workspace.package]\nversion = "0.10.0"\n')
-        with self.assertRaisesRegex(ValueError, "0.14.0 source"):
+        with self.assertRaisesRegex(ValueError, "0.17.0 source"):
             package(self.root)
 
     def test_rejects_webassembly(self):
@@ -50,8 +50,8 @@ class PackagingTests(unittest.TestCase):
             prefix = "Payload/EffectCraftNative.app/"
             info = plistlib.loads(archive.read(prefix + "Info.plist"))
             self.assertEqual(info["CFBundleIdentifier"], "com.effectcraft.ipad.nativepreview")
-            self.assertEqual(info["CFBundleVersion"], "19")
-            self.assertEqual(info["CFBundleShortVersionString"], "0.14.0")
+            self.assertEqual(info["CFBundleVersion"], "20")
+            self.assertEqual(info["CFBundleShortVersionString"], "0.17.0")
             self.assertEqual(info["CFBundleDisplayName"], "EffectCraft")
             self.assertEqual(info["CFBundleName"], "EffectCraft")
             self.assertEqual(info["UIDeviceFamily"], [2])
