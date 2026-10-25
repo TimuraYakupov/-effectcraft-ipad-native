@@ -13,8 +13,8 @@ import tomllib
 def package(root: Path) -> Path:
     source = tomllib.loads((root / "effectcraft/Cargo.toml").read_text(encoding="utf-8"))
     source_version = source["workspace"]["package"]["version"]
-    if source_version != "0.14.0":
-        raise ValueError("Expected EffectCraft 0.14.0 source, not a relabeled older build")
+    if source_version != "0.17.0":
+        raise ValueError("Expected EffectCraft 0.17.0 source, not a relabeled older build")
     binary = root / "effectcraft/target/aarch64-apple-ios/release/effectcraft-ios"
     payload = binary.read_bytes()
     if len(payload) < 32 or struct.unpack_from("<III", payload) != (0xFEEDFACF, 0x0100000C, 0):
@@ -32,7 +32,7 @@ def package(root: Path) -> Path:
         "CFBundleExecutable": "EffectCraftNative",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": source_version,
-        "CFBundleVersion": "19",
+        "CFBundleVersion": "20",
         "MinimumOSVersion": "16.0",
         "CFBundleIconFiles": ["AppIcon76x76", "AppIcon83.5x83.5"],
         "CFBundleIcons~ipad": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon76x76", "AppIcon83.5x83.5"]}},
@@ -66,7 +66,7 @@ def package(root: Path) -> Path:
     }
     out = root / "output"
     out.mkdir(exist_ok=True)
-    ipa = out / f"EffectCraft-{source_version}-iPad-Build-19.ipa"
+    ipa = out / f"EffectCraft-{source_version}-iPad-Build-20.ipa"
     prefix = "Payload/EffectCraftNative.app/"
     with zipfile.ZipFile(ipa, "w", zipfile.ZIP_DEFLATED) as archive:
         executable = zipfile.ZipInfo(prefix + "EffectCraftNative")
