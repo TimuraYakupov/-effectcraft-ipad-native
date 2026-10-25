@@ -38,6 +38,9 @@ jobs:
       - name: Test fonts and text layout
         working-directory: effectcraft
         run: cargo +1.95.0 test --locked -p effectcraft-text --lib
+      - name: Test Keyframe Velocity multi-selection regression
+        working-directory: effectcraft
+        run: cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --lib velocity_multiselection_tests
       - name: Test timeline trimming
         working-directory: effectcraft
         run: cargo +1.95.0 test --locked -p effectcraft-ui-egui --features eframe/x11 --test ui_timeline_trim
