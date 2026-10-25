@@ -19,6 +19,11 @@ git -C effectcraft checkout -B ipad-v017 "${NEW}"
 # Conflicting upstream modifications win; iPad-only code and nonconflicting
 # changes survive. CI builds/tests will expose any lost host integration.
 git -C effectcraft -c user.name="EffectCraft iPad CI" -c user.email="effectcraft-ipad@users.noreply.github.com" merge --no-ff -X ours -m "Port iPad overlay onto v0.17.0" ipad-overlay
+# The old iPad reduced-still cache patch collides with upstream #1812, which
+# already implements a more complete still_at_size cache and nominal key.
+# Restore the 0.17 upstream implementation rather than keeping an orphaned
+# reduced_still conditional from the 0.14 merge.
+git -C effectcraft show "${NEW}:crates/media/src/pool.rs" > effectcraft/crates/media/src/pool.rs
 python3 scripts/fix_velocity_selection.py effectcraft
 # Workspace packages grew since v0.14; make the lockfile consistent instead
 # of copying outdated 0.14 package metadata into a 0.17 binary.
