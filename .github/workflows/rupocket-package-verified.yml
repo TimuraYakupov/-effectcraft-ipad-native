@@ -1,0 +1,27 @@
+name: Package verified RuPocket 0.1.1
+on:
+  push:
+    branches: ["rupocket/iphone"]
+    paths: [".github/workflows/rupocket-package-verified.yml"]
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-15-intel
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: RuPocket
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require identical application code to the tested build
+        run: git diff --exit-code 58304f9a8fc8c4db5498bbfd46b791ec017c9f88 HEAD -- RuPocket RuPocket.xcodeproj
+      - name: Build already tested iPhone application
+        run: bash scripts/build-ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RuPocket-0.1.1-iPhone
+          path: RuPocket/build/RuPocket-0.1.1-unsigned.ipa
+          if-no-files-found: error
