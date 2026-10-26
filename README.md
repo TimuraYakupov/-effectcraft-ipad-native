@@ -124,3 +124,7 @@ first-key-is-an-endpoint failure and assert that both sides remain available.
 The existing native file service, UIKit keyboard/mouse handling, touch release
 drop fix, 2 GiB memory preview, disk cache, fonts, audio, and LiveContainer bundle
 identity should be preserved, subject to CI and physical iPad validation.
+
+## Build 21 (EffectCraft 0.17.0) — native File menu fix
+
+The v0.17 menu merge accidentally dropped host-command enablement from `entry_enabled`: AE ZIP and Fonts entries were visible but always disabled. Build 21 explicitly routes `bridge.*` enablement through the installed native Bridge hook **before** the engine fallback. A native-host regression test asserts Import AE ZIP, Export Project ZIP and Import Fonts are enabled, Save ZIP is correctly conditional, and menu invocation reaches the Bridge action queue. The underlying iPad Files and ZIP handling remain unchanged.
