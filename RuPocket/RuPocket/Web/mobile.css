@@ -30,6 +30,7 @@ html.rp-mobile.rp-rendered body > :not(#rp-app) { display:none!important; }
 .rp-mobile #rp-app .rp-category-toggle::-webkit-details-marker { display:none!important; }
 .rp-mobile #rp-app .rp-category-group[open] > .rp-category-toggle .rp-chevron { transform:rotate(90deg); }
 .rp-mobile #rp-app .rp-category-children { padding:0 10px 10px!important; }
+.rp-mobile #rp-app .rp-category-group:not([open]) > .rp-category-children { display:none!important; }
 .rp-mobile #rp-app .rp-category-children .rp-forum-card { border-radius:12px!important; background:#f6f8fc!important; }
 .rp-mobile #rp-app .rp-description, .rp-mobile #rp-app .rp-comment, .rp-mobile #rp-app .rp-form { display:block!important; min-width:0!important; width:100%!important; padding:16px!important; margin:0 0 14px!important; border:1px solid var(--rp-line)!important; border-radius:16px!important; background:#fff!important; }
 .rp-mobile #rp-app .post_body, .rp-mobile #rp-app .postbody { display:block!important; min-width:0!important; width:100%!important; max-width:100%!important; margin:0!important; padding:0!important; background:transparent!important; color:var(--rp-ink)!important; font:17px/1.65 -apple-system,sans-serif!important; }

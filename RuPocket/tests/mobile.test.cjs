@@ -214,3 +214,13 @@ test('A global header linked to a forum stays with its own child forums', () => 
   assert.equal(p.document.querySelectorAll('#rp-app .rp-forum-card').length, 3);
   p.window.close();
 });
+
+test('Closed category contents stay hidden despite the card grid display rule', () => {
+  const p = page('<div class="cat_title">Игры</div><a href="viewforum.php?f=10">Игры для консолей</a>', 'https://rutracker.org/forum/index.php');
+  const style = p.document.createElement('style'); style.textContent = css; p.document.head.appendChild(style);
+  const group = p.document.querySelector('#rp-app details'), children = group.querySelector('.rp-category-children');
+  assert.equal(p.window.getComputedStyle(children).display, 'none');
+  group.open = true;
+  assert.equal(p.window.getComputedStyle(children).display, 'grid');
+  p.window.close();
+});
