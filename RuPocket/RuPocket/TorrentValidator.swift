@@ -21,7 +21,7 @@ enum TorrentValidator {
             guard index > start, index < bytes.count, bytes[index] == 58,
                   index - start <= 9,
                   !(index - start > 1 && bytes[start] == 48),
-                  let length = Int(String(bytes: bytes[start..<index], encoding: .ascii)) else { return nil }
+                  let length = Int(String(decoding: bytes[start..<index], as: UTF8.self)) else { return nil }
             index += 1
             guard length <= bytes.count - index else { return nil }
             let result = bytes[index..<(index + length)]
