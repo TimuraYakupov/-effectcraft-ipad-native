@@ -138,6 +138,13 @@ test('Section filter hides only unmatched cards', () => {
   p.window.close();
 });
 
+test('An embedded sign-in widget does not replace the catalogue', () => {
+  const p = page('<form action="login.php"><input name="login_password" type="password"></form><a href="viewforum.php?f=1">Музыка</a>', 'https://rutracker.org/forum/index.php');
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-card').length, 1);
+  assert.match(p.document.querySelector('.rp-page-title').textContent, /Разделы/);
+  p.window.close();
+});
+
 test('Moving a description preserves spoiler listeners and restores the original document', () => {
   const p = page('<h1 id="topic-title">Раздача</h1><table id="posts"><tr><td><div class="post_body"><button id="spoiler">Спойлер</button><p>Описание</p></div></td></tr></table>', 'https://rutracker.org/forum/viewtopic.php?t=2');
   const description = p.document.querySelector('.post_body');

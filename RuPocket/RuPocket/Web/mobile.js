@@ -96,13 +96,14 @@
     const login = document.querySelector('input[name="login_password"]')?.form;
     const search = document.querySelector('input[name="nm"]')?.form;
     const bodies = Array.from(document.querySelectorAll('.post_body, .postbody')).filter(n => !n.parentElement?.closest('.post_body, .postbody'));
-    if (login) return {type: 'login', title: 'Вход в RuTracker', form: login};
+    if (login && /\/login\.php$/.test(path)) return {type: 'login', title: 'Вход в RuTracker', form: login};
     if (/\/viewtopic\.php$/.test(path) && bodies.length) return {type: 'topic', title: pageTitle(), bodies, pages: pagination()};
     const list = /\/(tracker|viewforum|search)\.php$/.test(path) ? topics() : [];
     const sections = forums();
     if (list.length) return {type: 'results', title: /tracker|search/.test(path) ? 'Результаты поиска' : pageTitle(), topics: list, pages: pagination()};
     if (sections.length) return {type: 'forums', title: /\/index\.php$/.test(path) && !pageURL().searchParams.has('c') ? 'Разделы RuTracker' : pageTitle(), forums: sections};
     if (search && /\/tracker\.php$/.test(path)) return {type: 'search', title: 'Поиск по RuTracker', form: search};
+    if (login) return {type: 'login', title: 'Вход в RuTracker', form: login};
     return null;
   };
   const signature = m => JSON.stringify({type: m.type, title: m.title, forums: m.forums, topics: m.topics, pages: m.pages, body: m.bodies?.map(n => clean(n.textContent)), form: m.form?.getAttribute('action')});
