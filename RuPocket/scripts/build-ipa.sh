@@ -14,7 +14,7 @@ import zipfile
 app = Path('build/DerivedData/Build/Products/Release-iphoneos/RuPocket.app')
 if not (app / 'RuPocket').is_file():
     raise SystemExit('Скомпилированное приложение не найдено')
-output = Path('build/RuPocket-0.1.0-unsigned.ipa')
+output = Path('build/RuPocket-0.1.1-unsigned.ipa')
 with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
     for file in sorted(app.rglob('*')):
         if file.is_file():

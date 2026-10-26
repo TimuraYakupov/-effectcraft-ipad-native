@@ -28,6 +28,7 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     @Published var bookmarks: [SavedTopic] = []
     @Published var downloads: [LocalTorrent] = []
     @Published var mobileLayout = true
+    @Published var searchRequest = UUID()
 
     private var observations: [NSKeyValueObservation] = []
     private var pendingSearch: (query: String, order: Int)?
@@ -43,29 +44,21 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        if UserDefaults.standard.integer(forKey: "layoutRevision") < 2 {
+            UserDefaults.standard.set(true, forKey: "mobileLayout")
+            UserDefaults.standard.set(2, forKey: "layoutRevision")
+        }
+        let useMobileLayout = UserDefaults.standard.object(forKey: "mobileLayout") as? Bool ?? true
+        WebPageAdapter.install(on: config, enabled: useMobileLayout)
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
-        mobileLayout = UserDefaults.standard.object(forKey: "mobileLayout") as? Bool ?? true
+        mobileLayout = useMobileLayout
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let saved = try? JSONDecoder().decode([SavedTopic].self, from: data) {
             bookmarks = saved.filter { SitePolicy.isTrusted($0.url) }
         }
-        config.userContentController.add(WeakScriptHandler(self), name: "rupocket")
-        if let jsURL = Bundle.main.url(forResource: "mobile", withExtension: "js"),
-           let cssURL = Bundle.main.url(forResource: "mobile", withExtension: "css"),
-           let js = try? String(contentsOf: jsURL, encoding: .utf8),
-           let css = try? String(contentsOf: cssURL, encoding: .utf8) {
-            let source = """
-            if (location.protocol === 'https:' && (location.hostname === 'rutracker.org' || location.hostname.endsWith('.rutracker.org'))) {
-                const style = document.createElement('style');
-                style.textContent = \(Self.json(css));
-                document.head.appendChild(style);
-                \(js)
-                window.RuPocket?.setEnabled(\(mobileLayout ? "true" : "false"));
-            }
-            """
-            config.userContentController.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        } else {
+        webView.configuration.userContentController.add(WeakScriptHandler(self), name: "rupocket")
+        if WebPageAdapter.source(enabled: useMobileLayout) == nil {
             alertMessage = "Не найдены файлы мобильной вёрстки. Проверь сборку приложения."
         }
         webView.navigationDelegate = self
@@ -209,7 +202,9 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
         isLoading = false
         currentURL = webView.url
         if let raw = webView.title, !raw.isEmpty { title = raw }
-        webView.evaluateJavaScript("window.RuPocket?.refresh()", completionHandler: nil)
+        if let source = WebPageAdapter.source(enabled: mobileLayout) {
+            webView.evaluateJavaScript(source, completionHandler: nil)
+        }
         if webView.url?.lastPathComponent == "tracker.php", let search = pendingSearch {
             pendingSearch = nil
             let script = "window.RuPocket?.search(\(Self.json(search.query)), \(search.order)) ?? false"
@@ -276,7 +271,9 @@ final class BrowserModel: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.frameInfo.isMainFrame,
               let origin = message.frameInfo.request.url, SitePolicy.isTrusted(origin),
-              let body = message.body as? [String: Any], body["type"] as? String == "page" else { return }
+              let body = message.body as? [String: Any] else { return }
+        if body["type"] as? String == "search" { searchRequest = UUID(); return }
+        guard body["type"] as? String == "page" else { return }
         if let pageTitle = body["title"] as? String, !pageTitle.isEmpty { title = pageTitle }
         currentURL = webView.url
         if let raw = body["torrentURL"] as? String, let url = URL(string: raw), SitePolicy.isTrusted(url), url.lastPathComponent == "dl.php" {

@@ -117,3 +117,36 @@ test('CSS parses and every selector is scoped to the mobile layout', () => {
   }
   p.window.close();
 });
+
+test('Portal columns are replaced with deduplicated full-width section cards', () => {
+  const p = page('<table id="desktop"><tr><td width="180"><a href="index.php?c=2">Кино и ТВ</a><a href="viewforum.php?f=7">Фильмы</a></td><td width="600">Авторские раздачи</td></tr></table><a href="viewforum.php?f=7">Дубль</a>', 'https://rutracker.org/forum/index.php');
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-card').length, 2);
+  assert.ok(p.document.documentElement.classList.contains('rp-rendered'));
+  assert.equal(p.document.querySelector('#rp-app .rp-card').href, 'https://rutracker.org/forum/index.php?c=2');
+  p.window.RuPocket.setEnabled(false);
+  assert.equal(p.document.getElementById('rp-app'), null);
+  assert.ok(p.document.getElementById('desktop'));
+  p.window.close();
+});
+
+test('Section filter hides only unmatched cards', () => {
+  const p = page('<a href="viewforum.php?f=1">Музыка</a><a href="viewforum.php?f=2">Кино</a>', 'https://rutracker.org/forum/index.php');
+  const filter = p.document.querySelector('.rp-section-filter');
+  filter.value = 'кино'; filter.dispatchEvent(new p.window.Event('input'));
+  assert.equal(p.document.querySelectorAll('.rp-card:not([hidden])').length, 1);
+  assert.match(p.document.querySelector('.rp-card:not([hidden])').textContent, /Кино/);
+  p.window.close();
+});
+
+test('Moving a description preserves spoiler listeners and restores the original document', () => {
+  const p = page('<h1 id="topic-title">Раздача</h1><table id="posts"><tr><td><div class="post_body"><button id="spoiler">Спойлер</button><p>Описание</p></div></td></tr></table>', 'https://rutracker.org/forum/viewtopic.php?t=2');
+  const description = p.document.querySelector('.post_body');
+  assert.ok(description.closest('#rp-app'));
+  let count = 0;
+  p.document.getElementById('spoiler').addEventListener('click', () => count++);
+  p.window.RuPocket.refresh(); p.document.getElementById('spoiler').click();
+  assert.equal(count, 1);
+  p.window.RuPocket.setEnabled(false);
+  assert.equal(p.document.querySelector('#posts .post_body'), description);
+  p.window.close();
+});

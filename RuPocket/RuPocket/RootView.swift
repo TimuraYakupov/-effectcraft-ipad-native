@@ -68,6 +68,7 @@ struct RootView: View {
             }.padding(.top, 8).padding(.bottom, 6).background(.white)
         }
         .background(Color(.systemGroupedBackground))
+        .onChange(of: browser.searchRequest) { _, _ in panel = .search }
         .sheet(item: $panel) { selected in
             switch selected {
             case .search: SearchPanel().environmentObject(browser)
@@ -240,7 +241,7 @@ private struct AboutPanel: View {
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("Версия", value: "0.1.0 · прототип")
+                    LabeledContent("Версия", value: "0.1.1")
                     Text("RuPocket — неофициальный клиент RuTracker для iPhone. Показывает сайт с мобильной вёрсткой и сохраняет .torrent.")
                 }
                 Section("Аккаунт") {

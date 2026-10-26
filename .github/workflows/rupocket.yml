@@ -31,14 +31,23 @@ jobs:
       - name: Run core tests
         run: |
           xcodebuild test -project RuPocket.xcodeproj -scheme RuPocket \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -parallel-testing-enabled NO \
             -resultBundlePath build/CoreTests.xcresult CODE_SIGNING_ALLOWED=NO
       - name: Build unsigned IPA
         run: bash scripts/build-ipa.sh
+      - name: Collect WebKit layout preview
+        run: |
+          CONTAINER_PATH=$(xcrun simctl get_app_container "$SIMULATOR_ID" org.timuryakupov.RuPocket data)
+          cp "$CONTAINER_PATH/Documents/LayoutCatalogue.png" build/LayoutCatalogue.png
       - uses: actions/upload-artifact@v4
         with:
-          name: RuPocket-0.1.0-iPhone
-          path: RuPocket/build/RuPocket-0.1.0-unsigned.ipa
+          name: RuPocket-0.1.1-iPhone
+          path: RuPocket/build/RuPocket-0.1.1-unsigned.ipa
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RuPocket-layout-check
+          path: RuPocket/build/LayoutCatalogue.png
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: failure()
