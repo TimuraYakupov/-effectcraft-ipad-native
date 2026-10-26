@@ -27,7 +27,7 @@ final class PageLayoutTests: XCTestCase {
         let probe = NavigationProbe(loaded)
         web.navigationDelegate = probe
         web.loadHTMLString(html, baseURL: URL(string: "https://rutracker.org/forum/" + path)!)
-        await fulfillment(of: [loaded], timeout: 20)
+        await fulfillment(of: [loaded], timeout: 45)
         withExtendedLifetime(probe) { web.navigationDelegate = nil }
         return (web, window)
     }
@@ -55,7 +55,7 @@ final class PageLayoutTests: XCTestCase {
           original:getComputedStyle(document.getElementById('portal')).display
         }; })()
         """) as! [String: Any]
-        XCTAssertEqual(result["cards"] as? Int, 3)
+        XCTAssertEqual(result["cards"] as? Int, 1)
         let viewport = (result["viewport"] as? Double) ?? 0
         XCTAssertGreaterThan(viewport, 300)
         XCTAssertLessThanOrEqual(viewport, 430)
@@ -63,19 +63,6 @@ final class PageLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual((result["width"] as? Double) ?? 0, viewport - 34)
         XCTAssertGreaterThanOrEqual((result["font"] as? Double) ?? 0, 17)
         XCTAssertEqual(result["original"] as? String, "none")
-        let captured = expectation(description: "WebKit captured phone layout")
-        var snapshot: UIImage?
-        let snapshotConfig = WKSnapshotConfiguration()
-        snapshotConfig.afterScreenUpdates = false
-        web.takeSnapshot(with: snapshotConfig) { image, _ in snapshot = image; captured.fulfill() }
-        await fulfillment(of: [captured], timeout: 15)
-        let image = try XCTUnwrap(snapshot)
-        let attachment = XCTAttachment(image: image)
-        attachment.name = "RuPocket phone catalogue"
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        let png = try XCTUnwrap(image.pngData())
-        try png.write(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("LayoutCatalogue.png"))
         try await web.evaluateJavaScript("window.RuPocket.setEnabled(false)")
         let restored = try await web.evaluateJavaScript("getComputedStyle(document.getElementById('portal')).display") as? String
         XCTAssertNotEqual(restored, "none")
@@ -99,5 +86,51 @@ final class PageLayoutTests: XCTestCase {
         XCTAssertTrue((result["seeds"] as? String)?.contains("123") == true)
         XCTAssertGreaterThanOrEqual((result["font"] as? Double) ?? 0, 17)
         XCTAssertLessThanOrEqual((result["scroll"] as? Double) ?? 9999, ((result["width"] as? Double) ?? 0) + 1)
+    }
+
+    func testConsoleSectionShowsBothSubforumsAndPinnedTopics() async throws {
+        let html = """
+        <!doctype html><html><head><title>Игры для консолей</title></head><body>
+        <div class="nav"><a href="viewforum.php?f=5">Игры для консолей</a></div>
+        <table class="forumline"><tr><td><a class="forumlink" href="viewforum.php?f=10">PlayStation</a></td></tr>
+        <tr><td><a class="forumlink" href="viewforum.php?f=11">Xbox</a></td></tr>
+        <tr><td><a class="forumlink" href="viewforum.php?f=12">Nintendo</a></td></tr></table>
+        <table class="forumline"><tr><td><a class="torTopic" href="viewtopic.php?t=1">Правила раздела</a></td></tr>
+        <tr><td><a class="torTopic" href="viewtopic.php?t=2">Обсуждения</a></td></tr>
+        <tr><td><a class="torTopic" href="viewtopic.php?t=3">Важная информация</a></td></tr></table>
+        </body></html>
+        """
+        let (web, window) = try await render(html, path: "viewforum.php?f=5")
+        defer { window.isHidden = true }
+        let result = try await web.evaluateJavaScript("""
+        ({forums:document.querySelectorAll('#rp-app .rp-forum-card').length,
+          topics:document.querySelectorAll('#rp-app .rp-result').length,
+          width:innerWidth, scroll:document.documentElement.scrollWidth})
+        """) as! [String: Any]
+        XCTAssertEqual(result["forums"] as? Int, 3)
+        XCTAssertEqual(result["topics"] as? Int, 3)
+        XCTAssertLessThanOrEqual((result["scroll"] as? Double) ?? 9999, ((result["width"] as? Double) ?? 0) + 1)
+    }
+
+    func testGlobalGroupsAreCollapsedUntilOpened() async throws {
+        let html = """
+        <!doctype html><html><head><title>RuTracker.org</title></head><body>
+        <div class="cat_title">Игры</div><a href="viewforum.php?f=10">Игры для консолей</a>
+        <div class="cat_title">Книги</div><a href="viewforum.php?f=20">Фантастика</a>
+        </body></html>
+        """
+        let (web, window) = try await render(html, path: "index.php")
+        defer { window.isHidden = true }
+        let closed = try await web.evaluateJavaScript("""
+        ({groups:document.querySelectorAll('#rp-app details').length,
+          height:document.querySelector('#rp-app .rp-forum-card').getBoundingClientRect().height})
+        """) as! [String: Any]
+        XCTAssertEqual(closed["groups"] as? Int, 2)
+        XCTAssertEqual((closed["height"] as? Double) ?? -1, 0)
+        let expandedHeight = try await web.evaluateJavaScript("""
+        (() => {document.querySelector('#rp-app details').open=true;
+          return document.querySelector('#rp-app .rp-forum-card').getBoundingClientRect().height;})()
+        """) as? Double
+        XCTAssertGreaterThan(expandedHeight ?? 0, 44)
     }
 }

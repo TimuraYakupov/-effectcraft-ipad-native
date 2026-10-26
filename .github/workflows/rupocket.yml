@@ -14,7 +14,7 @@ defaults:
     working-directory: RuPocket
 jobs:
   build:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -39,19 +39,9 @@ jobs:
         run: bash scripts/build-ipa.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: RuPocket-0.1.1-iPhone
-          path: RuPocket/build/RuPocket-0.1.1-unsigned.ipa
+          name: RuPocket-0.1.2-iPhone
+          path: RuPocket/build/RuPocket-0.1.2-unsigned.ipa
           if-no-files-found: error
-      - name: Collect WebKit layout preview
-        continue-on-error: true
-        run: |
-          CONTAINER_PATH=$(xcrun simctl get_app_container "$SIMULATOR_ID" org.timuryakupov.RuPocket data)
-          cp "$CONTAINER_PATH/Documents/LayoutCatalogue.png" build/LayoutCatalogue.png
-      - uses: actions/upload-artifact@v4
-        with:
-          name: RuPocket-layout-check
-          path: RuPocket/build/LayoutCatalogue.png
-          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

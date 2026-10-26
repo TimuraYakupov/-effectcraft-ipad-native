@@ -235,8 +235,8 @@
 				"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
 				"SUPPORTS_MACCATALYST" = "NO";
 				"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/Frameworks");
-				"MARKETING_VERSION" = "0.1.1";
-				"CURRENT_PROJECT_VERSION" = "2";
+				"MARKETING_VERSION" = "0.1.2";
+				"CURRENT_PROJECT_VERSION" = "3";
 			};
 			"name" = "Debug";
 		};
@@ -253,8 +253,8 @@
 				"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
 				"SUPPORTS_MACCATALYST" = "NO";
 				"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/Frameworks");
-				"MARKETING_VERSION" = "0.1.1";
-				"CURRENT_PROJECT_VERSION" = "2";
+				"MARKETING_VERSION" = "0.1.2";
+				"CURRENT_PROJECT_VERSION" = "3";
 			};
 			"name" = "Release";
 		};

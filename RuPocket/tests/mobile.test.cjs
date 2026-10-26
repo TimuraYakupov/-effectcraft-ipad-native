@@ -120,7 +120,7 @@ test('CSS parses and every selector is scoped to the mobile layout', () => {
 
 test('Portal columns are replaced with deduplicated full-width section cards', () => {
   const p = page('<table id="desktop"><tr><td width="180"><a href="index.php?c=2">Кино и ТВ</a><a href="viewforum.php?f=7">Фильмы</a></td><td width="600">Авторские раздачи</td></tr></table><a href="viewforum.php?f=7">Дубль</a>', 'https://rutracker.org/forum/index.php');
-  assert.equal(p.document.querySelectorAll('#rp-app .rp-card').length, 2);
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-card').length, 1);
   assert.ok(p.document.documentElement.classList.contains('rp-rendered'));
   assert.equal(p.document.querySelector('#rp-app .rp-card').href, 'https://rutracker.org/forum/index.php?c=2');
   p.window.RuPocket.setEnabled(false);
@@ -155,5 +155,62 @@ test('Moving a description preserves spoiler listeners and restores the original
   assert.equal(count, 1);
   p.window.RuPocket.setEnabled(false);
   assert.equal(p.document.querySelector('#posts .post_body'), description);
+  p.window.close();
+});
+
+test('Home shows global categories instead of a flat list of every forum', () => {
+  const p = page('<table><tr><th><a href="index.php?c=1">Игры</a></th></tr><tr><td><a class="forumlink" href="viewforum.php?f=10">Игры для консолей</a><a class="forumlink" href="viewforum.php?f=11">Игры для ПК</a></td></tr><tr><th><a href="index.php?c=2">Кино</a></th></tr><tr><td><a class="forumlink" href="viewforum.php?f=20">HD-фильмы</a></td></tr></table>', 'https://rutracker.org/forum/index.php');
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-forum-card').length, 2);
+  assert.deepEqual(Array.from(p.document.querySelectorAll('#rp-app .rp-card-title'), n => n.textContent), ['Игры', 'Кино']);
+  assert.ok(Array.from(p.document.querySelectorAll('#rp-app .rp-forum-card')).every(a => a.href.includes('index.php?c=')));
+  p.window.close();
+});
+
+test('Console forum retains its subforums alongside three pinned topics', () => {
+  const children = ['PlayStation', 'Xbox', 'Nintendo', 'Другие консоли'].map((name, i) => `<tr><td><h4 class="forumlink"><a href="viewforum.php?f=${10 + i}">${name}</a></h4></td><td class="last-post"><a href="viewtopic.php?t=900">Последнее сообщение</a></td></tr>`).join('');
+  const pinned = ['Правила раздела', 'Обсуждение консолей', 'Важная информация'].map((name, i) => `<tr><td><a class="torTopic" href="viewtopic.php?t=${100 + i}">${name}</a></td></tr>`).join('');
+  const p = page(`<nav><a href="viewforum.php?f=1">Игры</a><a href="viewforum.php?f=5">Игры для консолей</a></nav><aside id="sidebar"><a href="viewforum.php?f=99">Посторонний раздел</a></aside><table class="forumline">${children}</table><table class="forumline">${pinned}</table><a class="pg" href="viewforum.php?f=5&start=50">2</a>`, 'https://rutracker.org/forum/viewforum.php?f=5');
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-forum-card').length, 4);
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-result').length, 3);
+  assert.match(p.document.querySelector('#rp-app').textContent, /Подразделы/);
+  assert.match(p.document.querySelector('#rp-app').textContent, /Темы и раздачи/);
+  assert.doesNotMatch(p.document.querySelector('#rp-app').textContent, /Посторонний|Последнее сообщение/);
+  assert.equal(p.document.querySelector('#rp-app .rp-pagination a').href, 'https://rutracker.org/forum/viewforum.php?f=5&start=50');
+  p.window.RuPocket.refresh();
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-forum-card').length, 4);
+  p.window.close();
+});
+
+test('A category page keeps subforums even when its title is a breadcrumb link', () => {
+  const p = page('<div class="nav"><a href="index.php?c=1">Игры</a></div><table class="forumline"><tr><td><a class="forumlink" href="viewforum.php?f=10">Игры для консолей</a></td></tr><tr><td><a class="forumlink" href="viewforum.php?f=11">Игры для ПК</a></td></tr></table>', 'https://rutracker.org/forum/index.php?c=1');
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-forum-card').length, 2);
+  assert.equal(p.document.querySelectorAll('#rp-app a[href*="index.php?c=1"]').length, 0);
+  p.window.close();
+});
+
+test('Unlinked category headers become collapsible global groups', () => {
+  const p = page('<table><tr><th class="cat_title">Игры</th></tr><tr><td><a class="forumlink" href="viewforum.php?f=10">Игры для консолей</a><a class="forumlink" href="viewforum.php?f=11">Игры для ПК</a></td></tr><tr><th class="cat_title">Книги</th></tr><tr><td><a class="forumlink" href="viewforum.php?f=20">Фантастика</a></td></tr></table>', 'https://rutracker.org/forum/index.php');
+  assert.equal(p.document.querySelectorAll('#rp-app details').length, 2);
+  assert.equal(p.document.querySelectorAll('#rp-app details[open]').length, 0);
+  const filter = p.document.querySelector('.rp-section-filter'); filter.value = 'консолей'; filter.dispatchEvent(new p.window.Event('input'));
+  assert.equal(p.document.querySelectorAll('#rp-app details:not([hidden])').length, 1);
+  assert.equal(p.document.querySelectorAll('#rp-app details[open]').length, 1);
+  assert.match(p.document.querySelector('#rp-app .rp-forum-card:not([hidden])').textContent, /консолей/);
+  p.window.close();
+});
+
+test('Modern topic markup and short titles are supported without table rows', () => {
+  const p = page('<div class="topic-card"><a class="topic-title" href="viewtopic.php?t=42#start">PS3</a><b class="seedmed">17</b></div>');
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-result').length, 1);
+  assert.equal(p.document.querySelector('#rp-app .rp-result').href, 'https://rutracker.org/forum/viewtopic.php?t=42');
+  assert.match(p.document.querySelector('#rp-app .rp-result').textContent, /17/);
+  p.window.close();
+});
+
+test('A global header linked to a forum stays with its own child forums', () => {
+  const p = page('<div class="cat_title"><a href="viewforum.php?f=1">Игры и развлечения</a></div><a href="viewforum.php?f=10">Игры для консолей</a><a href="viewforum.php?f=11">Игры для ПК</a>', 'https://rutracker.org/forum/index.php');
+  assert.equal(p.document.querySelectorAll('#rp-app details').length, 1);
+  assert.match(p.document.querySelector('#rp-app summary').textContent, /Игры и развлечения/);
+  assert.equal(p.document.querySelectorAll('#rp-app .rp-forum-card').length, 3);
   p.window.close();
 });

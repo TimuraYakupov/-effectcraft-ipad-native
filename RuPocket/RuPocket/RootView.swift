@@ -241,7 +241,7 @@ private struct AboutPanel: View {
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("Версия", value: "0.1.1")
+                    LabeledContent("Версия", value: "0.1.2")
                     Text("RuPocket — неофициальный клиент RuTracker для iPhone. Показывает сайт с мобильной вёрсткой и сохраняет .torrent.")
                 }
                 Section("Аккаунт") {

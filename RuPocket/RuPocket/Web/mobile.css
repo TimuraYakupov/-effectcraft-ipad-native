@@ -22,6 +22,15 @@ html.rp-mobile.rp-rendered body > :not(#rp-app) { display:none!important; }
 .rp-mobile #rp-app .rp-chip { display:inline-block!important; padding:4px 7px!important; border-radius:7px!important; background:#f0f4fa!important; color:#66768c!important; font:13px/1.3 -apple-system,sans-serif!important; }
 .rp-mobile #rp-app .rp-seeds { background:#eaf7ef!important; color:#208252!important; }
 .rp-mobile #rp-app .rp-count { margin:0 0 12px!important; color:#7b889a!important; font-size:13px!important; }
+.rp-mobile #rp-app .rp-section-heading { display:block!important; margin:24px 0 12px!important; color:var(--rp-ink)!important; font:700 19px/1.4 -apple-system,sans-serif!important; }
+.rp-mobile #rp-app .rp-groups { display:grid!important; gap:10px!important; }
+.rp-mobile #rp-app .rp-category-group { display:block!important; min-width:0!important; border:1px solid var(--rp-line)!important; border-radius:16px!important; background:#fff!important; }
+.rp-mobile #rp-app .rp-category-group[hidden] { display:none!important; }
+.rp-mobile #rp-app .rp-category-toggle { display:flex!important; align-items:center!important; gap:13px!important; min-height:84px!important; padding:16px!important; cursor:pointer; list-style:none!important; }
+.rp-mobile #rp-app .rp-category-toggle::-webkit-details-marker { display:none!important; }
+.rp-mobile #rp-app .rp-category-group[open] > .rp-category-toggle .rp-chevron { transform:rotate(90deg); }
+.rp-mobile #rp-app .rp-category-children { padding:0 10px 10px!important; }
+.rp-mobile #rp-app .rp-category-children .rp-forum-card { border-radius:12px!important; background:#f6f8fc!important; }
 .rp-mobile #rp-app .rp-description, .rp-mobile #rp-app .rp-comment, .rp-mobile #rp-app .rp-form { display:block!important; min-width:0!important; width:100%!important; padding:16px!important; margin:0 0 14px!important; border:1px solid var(--rp-line)!important; border-radius:16px!important; background:#fff!important; }
 .rp-mobile #rp-app .post_body, .rp-mobile #rp-app .postbody { display:block!important; min-width:0!important; width:100%!important; max-width:100%!important; margin:0!important; padding:0!important; background:transparent!important; color:var(--rp-ink)!important; font:17px/1.65 -apple-system,sans-serif!important; }
 .rp-mobile #rp-app .rp-description *, .rp-mobile #rp-app .rp-comment * { max-width:100%!important; font-size:inherit!important; line-height:inherit!important; overflow-wrap:anywhere!important; }
