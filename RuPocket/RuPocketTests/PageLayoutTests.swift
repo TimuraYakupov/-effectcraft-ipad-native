@@ -22,13 +22,13 @@ final class PageLayoutTests: XCTestCase {
         let controller = UIViewController()
         window.rootViewController = controller
         controller.view.addSubview(web)
-        window.isHidden = false
+        window.makeKeyAndVisible()
         let loaded = expectation(description: "WebKit loaded fixture")
         let probe = NavigationProbe(loaded)
         web.navigationDelegate = probe
         web.loadHTMLString(html, baseURL: URL(string: "https://rutracker.org/forum/" + path)!)
         await fulfillment(of: [loaded], timeout: 20)
-        web.navigationDelegate = nil
+        withExtendedLifetime(probe) { web.navigationDelegate = nil }
         return (web, window)
     }
 
@@ -63,7 +63,13 @@ final class PageLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual((result["width"] as? Double) ?? 0, viewport - 34)
         XCTAssertGreaterThanOrEqual((result["font"] as? Double) ?? 0, 17)
         XCTAssertEqual(result["original"] as? String, "none")
-        let image = try await web.takeSnapshot(configuration: nil)
+        let captured = expectation(description: "WebKit captured phone layout")
+        var snapshot: UIImage?
+        let snapshotConfig = WKSnapshotConfiguration()
+        snapshotConfig.afterScreenUpdates = false
+        web.takeSnapshot(with: snapshotConfig) { image, _ in snapshot = image; captured.fulfill() }
+        await fulfillment(of: [captured], timeout: 15)
+        let image = try XCTUnwrap(snapshot)
         let attachment = XCTAttachment(image: image)
         attachment.name = "RuPocket phone catalogue"
         attachment.lifetime = .keepAlways
