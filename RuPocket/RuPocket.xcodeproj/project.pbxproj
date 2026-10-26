@@ -1,0 +1,342 @@
+// !$*UTF8*$!
+{
+	"archiveVersion" = 1;
+	"classes" = {
+	};
+	"objectVersion" = 56;
+	"objects" = {
+		"F8716580109FA84E4E528FC5" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "RuPocket/BrowserModel.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"76CB6211A0BF179E238195A5" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "F8716580109FA84E4E528FC5";
+		};
+		"F097CC469317A68C4EE69097" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "RuPocket/Models.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"E6CB11A0F388829E78324274" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "F097CC469317A68C4EE69097";
+		};
+		"794C491BEFEA139868A7169C" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "RuPocket/RootView.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"E9EBFAC9070D6AEE68B00311" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "794C491BEFEA139868A7169C";
+		};
+		"F71967340067A9344F731AB3" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "RuPocket/RuPocketApp.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"371360592D01FE15738A663C" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "F71967340067A9344F731AB3";
+		};
+		"EE247D4A1FF9C2A653CB9866" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "RuPocket/TorrentValidator.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"FC1AD5661C2FE001484CA8FE" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "EE247D4A1FF9C2A653CB9866";
+		};
+		"1EFA0DCA60FB17CD01D50E1A" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "RuPocketTests/CoreTests.swift";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"490FC98BDBBAA922611F9916" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "1EFA0DCA60FB17CD01D50E1A";
+		};
+		"CD7381EDDD4640CB9035BE91" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.css";
+			"path" = "RuPocket/Web/mobile.css";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"6D71ABAC78B19ECD3AEFB8CE" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "CD7381EDDD4640CB9035BE91";
+		};
+		"1E003DBDE9BE832B91DBCBCA" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.javascript";
+			"path" = "RuPocket/Web/mobile.js";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"CD18763A28CA7A2B0AF57264" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "1E003DBDE9BE832B91DBCBCA";
+		};
+		"5621B358A79457085661BA0E" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "folder.assetcatalog";
+			"path" = "RuPocket/Assets.xcassets";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"6839E2D90C4C30F3DED6D996" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "5621B358A79457085661BA0E";
+		};
+		"0D9946AEFAA1F38CE6AE9182" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.xml";
+			"path" = "RuPocket/PrivacyInfo.xcprivacy";
+			"sourceTree" = "SOURCE_ROOT";
+		};
+		"155A01E00A4E3081217F2110" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "0D9946AEFAA1F38CE6AE9182";
+		};
+		"8CEDA7969DF3E20018ADE29A" = {
+			"isa" = "PBXFileReference";
+			"explicitFileType" = "wrapper.application";
+			"path" = "RuPocket.app";
+			"sourceTree" = "BUILT_PRODUCTS_DIR";
+			"includeInIndex" = 0;
+		};
+		"F7274FA43EF4B25DC0D9F954" = {
+			"isa" = "PBXFileReference";
+			"explicitFileType" = "wrapper.cfbundle";
+			"path" = "RuPocketTests.xctest";
+			"sourceTree" = "BUILT_PRODUCTS_DIR";
+			"includeInIndex" = 0;
+		};
+		"FBDC4F23F93125BBEEAE800C" = {
+			"isa" = "PBXGroup";
+			"children" = ("8CEDA7969DF3E20018ADE29A", "F7274FA43EF4B25DC0D9F954");
+			"name" = "Products";
+			"sourceTree" = "<group>";
+		};
+		"64292B1C2B2E13EAD8788FC8" = {
+			"isa" = "PBXGroup";
+			"children" = ("F8716580109FA84E4E528FC5", "F097CC469317A68C4EE69097", "794C491BEFEA139868A7169C", "F71967340067A9344F731AB3", "EE247D4A1FF9C2A653CB9866", "1EFA0DCA60FB17CD01D50E1A", "CD7381EDDD4640CB9035BE91", "1E003DBDE9BE832B91DBCBCA", "5621B358A79457085661BA0E", "0D9946AEFAA1F38CE6AE9182", "FBDC4F23F93125BBEEAE800C");
+			"sourceTree" = "<group>";
+		};
+		"FDBEB636160CC4A63F780304" = {
+			"isa" = "PBXSourcesBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ("76CB6211A0BF179E238195A5", "E6CB11A0F388829E78324274", "E9EBFAC9070D6AEE68B00311", "371360592D01FE15738A663C", "FC1AD5661C2FE001484CA8FE");
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		"2BF5DE592226D457D3BCDAC0" = {
+			"isa" = "PBXResourcesBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ("6D71ABAC78B19ECD3AEFB8CE", "CD18763A28CA7A2B0AF57264", "6839E2D90C4C30F3DED6D996", "155A01E00A4E3081217F2110");
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		"FA3C5073B463D1BB4154A72F" = {
+			"isa" = "PBXFrameworksBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ();
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		"BBF27171F2E9EBCCAFD3E545" = {
+			"isa" = "PBXSourcesBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ("490FC98BDBBAA922611F9916");
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		"CD5BADB5A91D597E76F60CF4" = {
+			"isa" = "PBXFrameworksBuildPhase";
+			"buildActionMask" = 2147483647;
+			"files" = ();
+			"runOnlyForDeploymentPostprocessing" = 0;
+		};
+		"AB52CB08E0FDF02BF6C67C33" = {
+			"isa" = "XCBuildConfiguration";
+			"buildSettings" = {
+				"SDKROOT" = "iphoneos";
+				"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
+				"SWIFT_VERSION" = "5.0";
+				"CLANG_ENABLE_MODULES" = "YES";
+				"CLANG_ENABLE_OBJC_ARC" = "YES";
+				"GCC_C_LANGUAGE_STANDARD" = "gnu17";
+				"SWIFT_STRICT_CONCURRENCY" = "minimal";
+				"ONLY_ACTIVE_ARCH" = "NO";
+				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+				"DEBUG_INFORMATION_FORMAT" = "dwarf";
+				"ENABLE_TESTABILITY" = "YES";
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG";
+			};
+			"name" = "Debug";
+		};
+		"5283471FF90C511CFE244FFF" = {
+			"isa" = "XCBuildConfiguration";
+			"buildSettings" = {
+				"SDKROOT" = "iphoneos";
+				"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
+				"SWIFT_VERSION" = "5.0";
+				"CLANG_ENABLE_MODULES" = "YES";
+				"CLANG_ENABLE_OBJC_ARC" = "YES";
+				"GCC_C_LANGUAGE_STANDARD" = "gnu17";
+				"SWIFT_STRICT_CONCURRENCY" = "minimal";
+				"ONLY_ACTIVE_ARCH" = "NO";
+				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+				"DEBUG_INFORMATION_FORMAT" = "dwarf-with-dsym";
+				"ENABLE_TESTABILITY" = "NO";
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "";
+			};
+			"name" = "Release";
+		};
+		"4BA304E783CFBB9FA6E56552" = {
+			"isa" = "XCConfigurationList";
+			"buildConfigurations" = ("AB52CB08E0FDF02BF6C67C33", "5283471FF90C511CFE244FFF");
+			"defaultConfigurationIsVisible" = 0;
+			"defaultConfigurationName" = "Release";
+		};
+		"EF00B4C26D3BA245CBAB3F00" = {
+			"isa" = "XCBuildConfiguration";
+			"buildSettings" = {
+				"PRODUCT_NAME" = "$(TARGET_NAME)";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.timuryakupov.RuPocket";
+				"INFOPLIST_FILE" = "RuPocket/Info.plist";
+				"GENERATE_INFOPLIST_FILE" = "NO";
+				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
+				"TARGETED_DEVICE_FAMILY" = "1";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
+				"SUPPORTS_MACCATALYST" = "NO";
+				"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/Frameworks");
+				"MARKETING_VERSION" = "0.1.0";
+				"CURRENT_PROJECT_VERSION" = "1";
+			};
+			"name" = "Debug";
+		};
+		"49B4940C5F901788C278DD41" = {
+			"isa" = "XCBuildConfiguration";
+			"buildSettings" = {
+				"PRODUCT_NAME" = "$(TARGET_NAME)";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.timuryakupov.RuPocket";
+				"INFOPLIST_FILE" = "RuPocket/Info.plist";
+				"GENERATE_INFOPLIST_FILE" = "NO";
+				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
+				"TARGETED_DEVICE_FAMILY" = "1";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
+				"SUPPORTS_MACCATALYST" = "NO";
+				"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/Frameworks");
+				"MARKETING_VERSION" = "0.1.0";
+				"CURRENT_PROJECT_VERSION" = "1";
+			};
+			"name" = "Release";
+		};
+		"BF6B243F84FA915024E66DCC" = {
+			"isa" = "XCConfigurationList";
+			"buildConfigurations" = ("EF00B4C26D3BA245CBAB3F00", "49B4940C5F901788C278DD41");
+			"defaultConfigurationIsVisible" = 0;
+			"defaultConfigurationName" = "Release";
+		};
+		"532167A2F4DF305CC7A47840" = {
+			"isa" = "XCBuildConfiguration";
+			"buildSettings" = {
+				"PRODUCT_NAME" = "$(TARGET_NAME)";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.timuryakupov.RuPocketTests";
+				"GENERATE_INFOPLIST_FILE" = "YES";
+				"TARGETED_DEVICE_FAMILY" = "1";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"TEST_HOST" = "$(BUILT_PRODUCTS_DIR)/RuPocket.app/RuPocket";
+				"BUNDLE_LOADER" = "$(TEST_HOST)";
+				"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks");
+			};
+			"name" = "Debug";
+		};
+		"613A5B8C1DD03DF932B456E4" = {
+			"isa" = "XCBuildConfiguration";
+			"buildSettings" = {
+				"PRODUCT_NAME" = "$(TARGET_NAME)";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.timuryakupov.RuPocketTests";
+				"GENERATE_INFOPLIST_FILE" = "YES";
+				"TARGETED_DEVICE_FAMILY" = "1";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"TEST_HOST" = "$(BUILT_PRODUCTS_DIR)/RuPocket.app/RuPocket";
+				"BUNDLE_LOADER" = "$(TEST_HOST)";
+				"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks");
+			};
+			"name" = "Release";
+		};
+		"5108F0FAAC041B35012A8D2F" = {
+			"isa" = "XCConfigurationList";
+			"buildConfigurations" = ("532167A2F4DF305CC7A47840", "613A5B8C1DD03DF932B456E4");
+			"defaultConfigurationIsVisible" = 0;
+			"defaultConfigurationName" = "Release";
+		};
+		"D799BAE6088A90139B415FCC" = {
+			"isa" = "PBXContainerItemProxy";
+			"containerPortal" = "98F54143AB4E86B28C3AFEE0";
+			"proxyType" = 1;
+			"remoteGlobalIDString" = "7D1043473D55BFA90E8530D3";
+			"remoteInfo" = "RuPocket";
+		};
+		"DE58E2B17C19600779694943" = {
+			"isa" = "PBXTargetDependency";
+			"target" = "7D1043473D55BFA90E8530D3";
+			"targetProxy" = "D799BAE6088A90139B415FCC";
+		};
+		"7D1043473D55BFA90E8530D3" = {
+			"isa" = "PBXNativeTarget";
+			"buildConfigurationList" = "BF6B243F84FA915024E66DCC";
+			"buildPhases" = ("FDBEB636160CC4A63F780304", "FA3C5073B463D1BB4154A72F", "2BF5DE592226D457D3BCDAC0");
+			"buildRules" = ();
+			"dependencies" = ();
+			"name" = "RuPocket";
+			"productName" = "RuPocket";
+			"productReference" = "8CEDA7969DF3E20018ADE29A";
+			"productType" = "com.apple.product-type.application";
+		};
+		"04D13FD0AA6F0197CF2C9990" = {
+			"isa" = "PBXNativeTarget";
+			"buildConfigurationList" = "5108F0FAAC041B35012A8D2F";
+			"buildPhases" = ("BBF27171F2E9EBCCAFD3E545", "CD5BADB5A91D597E76F60CF4");
+			"buildRules" = ();
+			"dependencies" = ("DE58E2B17C19600779694943");
+			"name" = "RuPocketTests";
+			"productName" = "RuPocketTests";
+			"productReference" = "F7274FA43EF4B25DC0D9F954";
+			"productType" = "com.apple.product-type.bundle.unit-test";
+		};
+		"98F54143AB4E86B28C3AFEE0" = {
+			"isa" = "PBXProject";
+			"attributes" = {
+				"LastUpgradeCheck" = "1600";
+				"TargetAttributes" = {
+					"7D1043473D55BFA90E8530D3" = {
+						"CreatedOnToolsVersion" = "16.0";
+					};
+					"04D13FD0AA6F0197CF2C9990" = {
+						"CreatedOnToolsVersion" = "16.0";
+						"TestTargetID" = "7D1043473D55BFA90E8530D3";
+					};
+				};
+			};
+			"buildConfigurationList" = "4BA304E783CFBB9FA6E56552";
+			"compatibilityVersion" = "Xcode 14.0";
+			"developmentRegion" = "ru";
+			"hasScannedForEncodings" = 0;
+			"knownRegions" = ("ru", "en", "Base");
+			"mainGroup" = "64292B1C2B2E13EAD8788FC8";
+			"productRefGroup" = "FBDC4F23F93125BBEEAE800C";
+			"projectDirPath" = "";
+			"projectRoot" = "";
+			"targets" = ("7D1043473D55BFA90E8530D3", "04D13FD0AA6F0197CF2C9990");
+		};
+	};
+	"rootObject" = "98F54143AB4E86B28C3AFEE0";
+}

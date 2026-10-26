@@ -2,6 +2,7 @@ name: Native iPad preview
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,48 @@
+name: RuPocket iPhone IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: ["rupocket/iphone"]
+permissions:
+  contents: read
+concurrency:
+  group: rupocket-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    working-directory: RuPocket
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Test mobile adapter
+        run: |
+          npm ci --prefix tests --ignore-scripts
+          node tests/mobile.test.cjs
+      - name: Select an available iPhone simulator
+        run: |
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for devices in data["devices"].values() for d in devices if d["name"].startswith("iPhone")))')
+          echo "SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
+      - name: Run core tests
+        run: |
+          xcodebuild test -project RuPocket.xcodeproj -scheme RuPocket \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -resultBundlePath build/CoreTests.xcresult CODE_SIGNING_ALLOWED=NO
+      - name: Build unsigned IPA
+        run: bash scripts/build-ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RuPocket-0.1.0-iPhone
+          path: RuPocket/build/RuPocket-0.1.0-unsigned.ipa
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results
+          path: RuPocket/build/CoreTests.xcresult
+          if-no-files-found: ignore
