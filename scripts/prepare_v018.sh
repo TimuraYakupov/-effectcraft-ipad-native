@@ -32,6 +32,6 @@ for path in crates/ui-egui/src/menus.rs crates/ui-egui/src/lib.rs crates/media/s
 done
 python3 scripts/migrate_v018.py effectcraft
 python3 scripts/fix_velocity_selection.py effectcraft
-python3 scripts/fix_v017_merge_compat.py effectcraft
+python3 scripts/fix_v018_merge_compat.py effectcraft
 python3 scripts/fix_v018_bridge_tests.py effectcraft
 git -C effectcraft status --short
