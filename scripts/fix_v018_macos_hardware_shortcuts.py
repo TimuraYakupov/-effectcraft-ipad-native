@@ -64,7 +64,7 @@ mod physical_apple_keyboard_tests {
     # Fail fast if the UIKit bridge does not forward all four modifiers.
     host=root/"apps/effectcraft-ios/src/keyboard.rs"
     native=host.read_text(encoding="utf-8")
-    for field in ('mac_cmd: mac_cmd','command: mac_cmd || ctrl','ctrl,','alt: value & (1 << 19) != 0','shift: value & (1 << 17) != 0'):
+    for field in ('mac_cmd,','command: mac_cmd || ctrl','ctrl,','alt: value & (1 << 19) != 0','shift: value & (1 << 17) != 0'):
         if field not in native:
             raise RuntimeError(f"Missing physical keyboard modifier bridge: {field}")
     print("iPad now uses macOS hardware shortcut policy (Cmd, Option, Control) with regression tests",flush=True)
