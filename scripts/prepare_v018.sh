@@ -22,5 +22,5 @@ done
 python3 scripts/migrate_v018.py effectcraft
 python3 scripts/fix_velocity_selection.py effectcraft
 python3 scripts/fix_v017_merge_compat.py effectcraft
-python3 scripts/fix_v017_bridge_activation.py effectcraft
+python3 scripts/fix_v018_bridge_tests.py effectcraft
 git -C effectcraft status --short
