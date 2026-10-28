@@ -55,8 +55,8 @@ def main(root: Path):
                 // The reported bug is ~one row high. Large separations mean
                 // this is a real touch elsewhere, not the indirect pointer.
                 if d.length_sq() > 0.25 && d.length_sq() <= 32.0 * 32.0 {
-                    log::debug!(target: "effectcraft_pointer",
-                        "Aligned primary click to visual pointer (delta {:.1}, {:.1})", d.x, d.y);
+                    // This code is also compiled by the standalone keyboard
+                    // regression crate, which intentionally has no log dependency.
                     *pos = hover;
                     fixed += 1;
                 }
