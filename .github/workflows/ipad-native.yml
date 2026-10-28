@@ -53,13 +53,6 @@ jobs:
       - name: Test image sequence round trip
         working-directory: effectcraft
         run: cargo +1.95.0 test --locked -p effectcraft-export --test it image_sequences_roundtrip
-  uikit-keyboard:
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Test keyboard focus and responder delivery in iPad Simulator
-        run: python3 scripts/test_uikit_keyboard.py
   native-ipad:
     runs-on: macos-15
     timeout-minutes: 60
@@ -69,6 +62,8 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+      - name: Test UIKit keyboard responder on iPad Simulator
+        run: python3 scripts/test_uikit_keyboard.py
       - name: Prepare pinned source
         run: |
           bash scripts/prepare_v018.sh
