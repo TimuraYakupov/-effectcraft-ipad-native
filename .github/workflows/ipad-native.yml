@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-ipad-${{ github.ref }}
+  group: native-ipad-build22-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -23,15 +23,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Prepare pinned source
         run: |
-          bash scripts/prepare_v017.sh
+          bash scripts/prepare_v018.sh
       - name: Install Rust
         run: rustup toolchain install 1.95.0 --profile minimal
-      - name: Update iOS workspace lockfile for 0.17.0
+      - name: Update iOS workspace lockfile for 0.18.0
         working-directory: effectcraft
         run: cargo +1.95.0 update --workspace
       - name: Reproduce build 14 native media-drop regression
         working-directory: effectcraft
-        run: python3 ../scripts/verify_touch_drop_regression.py
+        run: python3 ../scripts/verify_touch_drop_regression_v018.py
       - name: Test native Bridge, input, settings and media drops
         working-directory: effectcraft
         run: cargo +1.95.0 test --locked -p effectcraft-ios --features eframe/x11
@@ -53,13 +53,6 @@ jobs:
       - name: Test image sequence round trip
         working-directory: effectcraft
         run: cargo +1.95.0 test --locked -p effectcraft-export --test it image_sequences_roundtrip
-  uikit-keyboard:
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Test keyboard focus and responder delivery in iPad Simulator
-        run: python3 scripts/test_uikit_keyboard.py
   native-ipad:
     runs-on: macos-15
     timeout-minutes: 60
@@ -69,14 +62,16 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v4
+      - name: Test UIKit keyboard responder on iPad Simulator
+        run: python3 scripts/test_uikit_keyboard.py
       - name: Prepare pinned source
         run: |
-          bash scripts/prepare_v017.sh
+          bash scripts/prepare_v018.sh
       - name: Install Rust
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup target add --toolchain 1.95.0 aarch64-apple-ios
-      - name: Update iOS workspace lockfile for 0.17.0
+      - name: Update iOS workspace lockfile for 0.18.0
         working-directory: effectcraft
         run: cargo +1.95.0 update --workspace
       - name: Locate iOS SDK

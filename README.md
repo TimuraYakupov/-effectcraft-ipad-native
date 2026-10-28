@@ -128,3 +128,7 @@ identity should be preserved, subject to CI and physical iPad validation.
 ## Build 21 (EffectCraft 0.17.0) — native File menu fix
 
 The v0.17 menu merge accidentally dropped host-command enablement from `entry_enabled`: AE ZIP and Fonts entries were visible but always disabled. Build 21 explicitly routes `bridge.*` enablement through the installed native Bridge hook **before** the engine fallback. A native-host regression test asserts Import AE ZIP, Export Project ZIP and Import Fonts are enabled, Save ZIP is correctly conditional, and menu invocation reaches the Bridge action queue. The underlying iPad Files and ZIP handling remain unchanged.
+
+## EffectCraft v0.18.0 — iPad build 22
+
+Builds the authentic upstream v0.18.0 tag (`c3600f9b59b109da97871a43a6898683a0163cb1`) with our previously validated iPad overlay. The upstream UI module split moves custom native File/AE ZIP/Fonts and diagnostics hooks to `hooks.rs` and menu submodules. The adapter recreates the host-specific enablement, action dispatch and native menu items, and retains the incoming/outgoing multi-selection velocity correction. All native input, media drag/drop and project loading are regression tested. Builds require passing macOS ARM64 and Ubuntu integration tests.
