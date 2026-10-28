@@ -132,3 +132,7 @@ The v0.17 menu merge accidentally dropped host-command enablement from `entry_en
 ## EffectCraft v0.18.0 — iPad build 22
 
 Builds the authentic upstream v0.18.0 tag (`c3600f9b59b109da97871a43a6898683a0163cb1`) with our previously validated iPad overlay. The upstream UI module split moves custom native File/AE ZIP/Fonts and diagnostics hooks to `hooks.rs` and menu submodules. The adapter recreates the host-specific enablement, action dispatch and native menu items, and retains the incoming/outgoing multi-selection velocity correction. All native input, media drag/drop and project loading are regression tested. Builds require passing macOS ARM64 and Ubuntu integration tests.
+
+## iPad Build 24 — macOS physical keyboard shortcuts
+
+The native iPad app now uses the macOS modifier scheme for its *physical* keyboard: ⌘ Command, ⌥ Option, ⇧ Shift, and ⌃ Control remain distinct, including Ctrl+Cmd combinations. Menus show Mac key glyphs. The existing UIKit HID keyboard forwarding and Russian layout-independent shortcuts remain intact. iPadOS-reserved system shortcuts cannot be captured by the app. No on-screen keyboard is added. Includes Build 23 pointer hit-test correction.
