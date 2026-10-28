@@ -37,4 +37,5 @@ python3 scripts/fix_v018_bridge_tests.py effectcraft
 python3 scripts/fix_v018_touch_drop.py effectcraft
 python3 scripts/fix_v018_ui_scale.py effectcraft
 python3 scripts/fix_v018_ui_conflicts.py effectcraft
+python3 scripts/fix_v018_cursor_hit_offset.py effectcraft
 git -C effectcraft status --short
