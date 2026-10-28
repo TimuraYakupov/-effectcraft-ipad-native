@@ -31,7 +31,7 @@ jobs:
         run: cargo +1.95.0 update --workspace
       - name: Reproduce build 14 native media-drop regression
         working-directory: effectcraft
-        run: python3 ../scripts/verify_touch_drop_regression.py
+        run: python3 ../scripts/verify_touch_drop_regression_v018.py
       - name: Test native Bridge, input, settings and media drops
         working-directory: effectcraft
         run: cargo +1.95.0 test --locked -p effectcraft-ios --features eframe/x11
