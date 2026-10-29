@@ -183,6 +183,22 @@ def main(root:Path):
     # on a non-primary button and a far away position, avoiding constructors changing with egui.
     new_tests=new_tests[:new_tests.index("    #[test]\n    fn real_touch_input_is_never_snapped_to_hover()")]
     s=replace_one(s,test_anchor,new_tests+test_anchor,"regression tests")
+
+    extra_test='''    #[test]
+    fn uikit_hover_end_does_not_cancel_native_primary_release() {
+        let mut bridge=Keyboard::new();
+        bridge.native_primary_down=true;
+        bridge.native_primary_this_frame=true;
+        let mut events=vec![];
+        bridge.record(&json!({"kind":"pointer","x":100.0,"y":200.0}),false,false,&mut events).unwrap();
+        bridge.record(&json!({"kind":"pointer","phase":"gone"}),false,false,&mut events).unwrap();
+        assert!(!events.iter().any(|e| matches!(e,Event::PointerGone)));
+        assert!(bridge.hover_ended_at.is_some());
+    }
+
+'''
+    s=replace_one(s,test_anchor,extra_test+test_anchor,"native mouse release must not be cancelled")
+
     s=replace_one(s,
       '        bridge.record(&json!({"kind":"pointer","phase":"gone"}), false, false, &mut e).unwrap();\n        let mut near=',
       '        bridge.record(&json!({"kind":"pointer","phase":"gone"}), false, false, &mut e).unwrap();\n        *bridge.hover_ended_at.as_mut().unwrap() -= std::time::Duration::from_secs(3);\n        let mut near=',
