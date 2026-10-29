@@ -25,6 +25,8 @@ def main(root:Path):
       '    /// UIKit may end hover on mouse press. Keep its last coordinate for release.\n'
       '    hover_present: bool,\n'
       '    hover_ended_at: Option<std::time::Instant>,\n'
+      '    native_primary_down: bool,\n'
+      '    native_primary_this_frame: bool,\n'
       '    pub pointer_alignment_count: u64,\n'
       '    pub pointer_alignment_debug: String,\n}',
       "state")
@@ -33,13 +35,15 @@ def main(root:Path):
       '            last_hover: None,\n'
       '            hover_present: false,\n'
       '            hover_ended_at: None,\n'
+      '            native_primary_down: false,\n'
+      '            native_primary_this_frame: false,\n'
       '            pointer_alignment_count: 0,\n'
       '            pointer_alignment_debug: "No primary mouse event observed".into(),\n',
       "state init")
     s=replace_one(s,
       '        self.last_hover = None;\n        self.modifiers = Modifiers::NONE;',
       '        self.last_hover = None;\n        self.hover_present = false;\n'
-      '        self.hover_ended_at = None;\n        self.modifiers = Modifiers::NONE;',
+      '        self.hover_ended_at = None;\n        self.native_primary_down = false;\n        self.native_primary_this_frame = false;\n        self.modifiers = Modifiers::NONE;',
       "focus reset")
     s=replace_one(s,
       '                self.last_hover = None;\n                if !self.primary_down { events.push(Event::PointerGone); }',
@@ -47,7 +51,10 @@ def main(root:Path):
       '                // Keep the last position briefly, otherwise click/release cannot align.\n'
       '                self.hover_present = false;\n'
       '                self.hover_ended_at = Some(std::time::Instant::now());\n'
-      '                if !self.primary_down { events.push(Event::PointerGone); }',
+      '                // Never cancel a native winit click when UIKit hover ends on press.\n'
+      '                if !self.primary_down && !self.native_primary_down && !self.native_primary_this_frame {\n'
+      '                    events.push(Event::PointerGone);\n'
+      '                }',
       "hover ended")
     s=replace_one(s,
       '                self.last_hover = Some((pos, std::time::Instant::now()));\n',
@@ -113,6 +120,13 @@ def main(root:Path):
         '        // Keep the boundary between native winit events and UIKit bridge events.\n'
         '        // Only the former may need calibration.\n'
         '        let native_event_count = input.events.len();\n'
+        '        self.native_primary_this_frame = false;\n'
+        '        for event in &input.events[..native_event_count] {\n'
+        '            if let Event::PointerButton { button: egui::PointerButton::Primary, pressed, .. } = event {\n'
+        '                self.native_primary_this_frame = true;\n'
+        '                self.native_primary_down = *pressed;\n'
+        '            }\n'
+        '        }\n'
         '        let prefix = format!("{}-", self.session);',
         "raw input boundary")
     s=replace_one(s,
@@ -169,6 +183,10 @@ def main(root:Path):
     # on a non-primary button and a far away position, avoiding constructors changing with egui.
     new_tests=new_tests[:new_tests.index("    #[test]\n    fn real_touch_input_is_never_snapped_to_hover()")]
     s=replace_one(s,test_anchor,new_tests+test_anchor,"regression tests")
+    s=replace_one(s,
+      '        bridge.record(&json!({"kind":"pointer","phase":"gone"}), false, false, &mut e).unwrap();\n        let mut near=',
+      '        bridge.record(&json!({"kind":"pointer","phase":"gone"}), false, false, &mut e).unwrap();\n        *bridge.hover_ended_at.as_mut().unwrap() -= std::time::Duration::from_secs(3);\n        let mut near=',
+      "expired hover regression")
     file.write_text(s,encoding="utf-8")
     # diagnostics UI is hidden under Help, avoids polluting editor
     dp=root/"apps/effectcraft-ios/src/diagnostics.rs"
