@@ -200,7 +200,7 @@ def main(root:Path):
     s=replace_one(s,test_anchor,extra_test+test_anchor,"native mouse release must not be cancelled")
 
     s=replace_one(s,
-      '        bridge.record(&json!({"kind":"pointer","phase":"gone"}), false, false, &mut e).unwrap();\n        let mut near=',
+      '        bridge.record(&json!({"kind":"pointer","phase":"gone"}),false,false,&mut e).unwrap();\n        let mut near=',
       '        bridge.record(&json!({"kind":"pointer","phase":"gone"}), false, false, &mut e).unwrap();\n        *bridge.hover_ended_at.as_mut().unwrap() -= std::time::Duration::from_secs(3);\n        let mut near=',
       "expired hover regression")
     file.write_text(s,encoding="utf-8")
