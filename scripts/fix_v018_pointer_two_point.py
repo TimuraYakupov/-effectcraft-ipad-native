@@ -193,7 +193,7 @@ def patch(root):
         // egui's hit testing. UIKit captures uncorrected physical tap positions.
         if self.calibration_stage != 0 {
             ctx.request_repaint_after(std::time::Duration::from_millis(40));
-            let screen = ctx.screen_rect();
+            let screen = ctx.content_rect();
             let target_x = (screen.max.x - 90.0).max(screen.min.x + 90.0);
             let upper_y = screen.min.y + 110.0;
             let lower_y = screen.max.y - 110.0;
