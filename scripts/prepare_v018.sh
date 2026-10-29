@@ -40,4 +40,5 @@ python3 scripts/fix_v018_ui_conflicts.py effectcraft
 python3 scripts/fix_v018_cursor_hit_offset.py effectcraft
 python3 scripts/fix_v018_macos_hardware_shortcuts.py effectcraft
 python3 scripts/fix_v018_cursor_hit_v2.py effectcraft
+python3 scripts/fix_v018_uikit_primary_taps.py effectcraft
 git -C effectcraft status --short

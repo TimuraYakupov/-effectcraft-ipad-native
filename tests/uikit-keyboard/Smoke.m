@@ -190,14 +190,20 @@ static void TestNativeTouchDelivery(UIView *view) {
                                     TestNativeTouchDelivery(guest.view);
                                     Check(ECKHandle(guest,Press(44,YES,0)), @"host presentation does not block guest key capture");
                                     Check(ECKMouse.view==guest.view && ECKMouse.secondary.buttonMaskRequired==UIEventButtonMaskSecondary, @"hover and secondary click are installed on the guest view");
+                                    Check(ECKMouse.primary && ECKMouse.primary.buttonMaskRequired==UIEventButtonMaskPrimary && ECKMouse.primary.delaysTouchesBegan && ECKMouse.primary.delaysTouchesEnded && ECKMouse.primary.cancelsTouchesInView, @"physical primary taps intercepted before displaced native touch events");
+                                    Check(ECKMouse.primary.allowedTouchTypes.count==1 && [ECKMouse.primary.allowedTouchTypes[0] integerValue]==UITouchTypeIndirectPointer, @"only indirect pointer input is captured; finger and Pencil remain native");
                                     TestPointer *pointer=[TestPointer new];pointer.point=CGPointMake(120,200);pointer.state=UIGestureRecognizerStateChanged;
                                     [ECKMouse hovering:(UIHoverGestureRecognizer *)(id)pointer];
                                     pointer.state=UIGestureRecognizerStateRecognized;[ECKMouse rightClick:(UITapGestureRecognizer *)(id)pointer];
+                                    pointer.point=CGPointMake(140,220);
+                                    [ECKMouse primaryClick:(UITapGestureRecognizer *)(id)pointer];
                                     After(0.3, ^{
                                         NSMutableArray *pointerRecords=[NSMutableArray new];
                                         for (NSDictionary *record in Records()) if ([record[@"kind"] isEqual:@"pointer"]) [pointerRecords addObject:record];
-                                        Check(pointerRecords.count==3, @"hover and right click produce three ordered pointer records");
+                                        Check(pointerRecords.count==5, @"hover, secondary click and primary click produce five ordered pointer records");
                                         Check([pointerRecords[0][@"x"] doubleValue]==120 && [pointerRecords[1][@"down"] boolValue] && ![pointerRecords[2][@"down"] boolValue], @"secondary down/up preserve hover coordinates");
+                                        Check([pointerRecords[3][@"x"] doubleValue]==140 && [pointerRecords[3][@"y"] doubleValue]==220 && [pointerRecords[3][@"button"] isEqual:@"primary"] && [pointerRecords[3][@"down"] boolValue] && ![pointerRecords[4][@"down"] boolValue], @"primary tap carries exact UIKit x/y with single down/up");
+                                        Check([pointerRecords[3][@"origin"] isEqual:@"uikit-primary-tap"] && ECKPrimaryTaps==1, @"native primary tap source and counter are reported");
                                         [guest presentViewController:[UIViewController new] animated:NO completion:^{
                                             After(0.5, ^{
                                                 Check(!ECKHandle(guest,Press(44,YES,0)), @"guest system modal still blocks editor keys");
