@@ -10,6 +10,7 @@ typedef void (*ECKPressIMP)(id, SEL, NSSet<UIPress *> *, UIPressesEvent *);
 static ECKPressIMP ECKOriginal[2][4];
 static BOOL ECKInstalled[2];
 static unsigned long long ECKSeen;
+static unsigned long long ECKPrimaryTaps;
 static NSInteger ECKLastCode;
 static NSTimeInterval ECKLastStatus;
 static __weak UIViewController *ECKGuest;
@@ -191,6 +192,7 @@ static UIViewController *ECKFind(void) {
 @interface ECPointer : NSObject <UIGestureRecognizerDelegate>
 @property(nonatomic,weak) UIView *view;
 @property(nonatomic,strong) UIHoverGestureRecognizer *hover;
+@property(nonatomic,strong) UITapGestureRecognizer *primary;
 @property(nonatomic,strong) UITapGestureRecognizer *secondary;
 @end
 static ECPointer *ECKMouse;
@@ -208,6 +210,21 @@ static ECPointer *ECKMouse;
     CGPoint point = [gesture locationInView:self.view];
     ECKWrite(@{@"kind":@"pointer",@"x":@(point.x),@"y":@(point.y)});
 }
+// The iPad trackpad's indirect-pointer tap is not consistently translated by
+// winit into a primary mouse button. Native pointer motion can arrive as touch
+// events with slightly different coordinates than the visible cursor. Use a
+// dedicated UIKit recognizer, with the UIKit-view position, for primary taps.
+// Delaying/cancelling UIKit touch delivery avoids a second, incorrect winit
+// primary click; an actual drag fails the tap recognizer and passes to winit.
+- (void)primaryClick:(UITapGestureRecognizer *)gesture {
+    if (![self active] || gesture.state != UIGestureRecognizerStateRecognized) return;
+    CGPoint point = [gesture locationInView:self.view];
+    ECKPrimaryTaps++;
+    ECKWrite(@{@"kind":@"pointer",@"origin":@"uikit-primary-tap",
+        @"button":@"primary",@"x":@(point.x),@"y":@(point.y),@"down":@YES});
+    ECKWrite(@{@"kind":@"pointer",@"origin":@"uikit-primary-tap",
+        @"button":@"primary",@"x":@(point.x),@"y":@(point.y),@"down":@NO});
+}
 - (void)rightClick:(UITapGestureRecognizer *)gesture {
     if (![self active] || gesture.state != UIGestureRecognizerStateRecognized) return;
     CGPoint point = [gesture locationInView:self.view];
@@ -222,6 +239,7 @@ static void ECKInstallPointer(UIView *view) {
     if (!view || ECKMouse.view == view) return;
     if (!ECKMouse) ECKMouse = [ECPointer new];
     if (ECKMouse.hover) [ECKMouse.view removeGestureRecognizer:ECKMouse.hover];
+    if (ECKMouse.primary) [ECKMouse.view removeGestureRecognizer:ECKMouse.primary];
     if (ECKMouse.secondary) [ECKMouse.view removeGestureRecognizer:ECKMouse.secondary];
     ECKMouse.view = view;
     UIHoverGestureRecognizer *hover = [[UIHoverGestureRecognizer alloc] initWithTarget:ECKMouse action:@selector(hovering:)];
@@ -229,6 +247,18 @@ static void ECKInstallPointer(UIView *view) {
     hover.cancelsTouchesInView = NO;
     hover.delegate = ECKMouse;
     [view addGestureRecognizer:hover]; ECKMouse.hover = hover;
+    // Only physical trackpad/mouse left clicks, never direct finger or Pencil
+    // input. UIKit swallows recognized taps before winit receives their
+    // displaced touch coordinates; failed taps remain available for dragging.
+    UITapGestureRecognizer *primary = [[UITapGestureRecognizer alloc] initWithTarget:ECKMouse action:@selector(primaryClick:)];
+    primary.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
+    primary.buttonMaskRequired = UIEventButtonMaskPrimary;
+    primary.numberOfTapsRequired = 1;
+    primary.delaysTouchesBegan = YES;
+    primary.delaysTouchesEnded = YES;
+    primary.cancelsTouchesInView = YES;
+    primary.delegate = ECKMouse;
+    [view addGestureRecognizer:primary]; ECKMouse.primary = primary;
     UITapGestureRecognizer *secondary = [[UITapGestureRecognizer alloc] initWithTarget:ECKMouse action:@selector(rightClick:)];
     secondary.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
     secondary.buttonMaskRequired = UIEventButtonMaskSecondary;
@@ -258,7 +288,8 @@ static void ECKActivate(void) {
         !active ? @"App inactive" : modal ? @"System dialog" : ECKBlocked ? @"File dialog" :
         ECKText ? @"Text input" : controller.isFirstResponder ? @"Ready" : @"Keyboard focus unavailable";
     NSDictionary *status = @{@"session":ECKSession ?: @"", @"state":state, @"view_hook":@(ECKInstalled[0]),
-        @"controller_hook":@(ECKInstalled[1]), @"focus":@(controller.isFirstResponder), @"native_presses":@(ECKSeen), @"last_code":@(ECKLastCode)};
+        @"controller_hook":@(ECKInstalled[1]), @"focus":@(controller.isFirstResponder), @"native_presses":@(ECKSeen), @"last_code":@(ECKLastCode),
+        @"native_primary_taps":@(ECKPrimaryTaps)};
     NSURL *root = ECKRoot;
     dispatch_async(ECKQueue, ^{
         NSData *data = [NSJSONSerialization dataWithJSONObject:status options:0 error:NULL];
