@@ -86,6 +86,9 @@ jobs:
           /tmp/ec-project-zip-tests
           cp effectcraft/apps/effectcraft-ios/src/key_codes.rs tests/hardware-keys/src/key_codes.rs
           cp effectcraft/apps/effectcraft-ios/src/keyboard.rs tests/hardware-keys/src/keyboard.rs
+          # Standalone keyboard harness still pins egui 0.36.2 (no MouseWheelSource).
+          # The full iPad app uses egui 0.37 and tests the source field unchanged.
+          sed -i.bak '/source: egui::MouseWheelSource::Trackpad,/d' tests/hardware-keys/src/keyboard.rs
           cargo +1.95.0 test --locked --manifest-path tests/hardware-keys/Cargo.toml
           python3 -m unittest discover -s scripts -p 'test_*.py'
       - name: Compile iPad Files platform module
