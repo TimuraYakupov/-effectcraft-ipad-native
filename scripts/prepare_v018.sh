@@ -45,4 +45,5 @@ python3 scripts/fix_v018_uikit_pointer_calibration.py effectcraft
 python3 scripts/fix_v018_pointer_two_point.py effectcraft
 python3 scripts/fix_v018_remove_green_crosshair.py effectcraft
 python3 scripts/fix_v018_unified_hover_coordinates.py effectcraft
+python3 scripts/fix_v018_trackpad_scroll_drag.py effectcraft
 git -C effectcraft status --short
