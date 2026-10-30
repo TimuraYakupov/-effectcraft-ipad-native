@@ -194,6 +194,9 @@ static UIViewController *ECKFind(void) {
 @property(nonatomic,strong) UIHoverGestureRecognizer *hover;
 @property(nonatomic,strong) UITapGestureRecognizer *primary;
 @property(nonatomic,strong) UITapGestureRecognizer *secondary;
+@property(nonatomic,strong) UIPanGestureRecognizer *scroll;
+@property(nonatomic,strong) UIPanGestureRecognizer *drag;
+@property(nonatomic,assign) BOOL indirectDragging;
 @end
 static ECPointer *ECKMouse;
 @implementation ECPointer
@@ -231,8 +234,49 @@ static ECPointer *ECKMouse;
     ECKWrite(@{@"kind":@"pointer",@"x":@(point.x),@"y":@(point.y),@"down":@YES});
     ECKWrite(@{@"kind":@"pointer",@"x":@(point.x),@"y":@(point.y),@"down":@NO});
 }
+// UIKit reports two-finger trackpad and mouse wheel gestures independently
+// of the touch stream used for indirect-pointer clicks.
+- (void)scrolling:(UIPanGestureRecognizer *)gesture {
+    if (![self active]) return;
+    UIGestureRecognizerState state = gesture.state;
+    if (state != UIGestureRecognizerStateBegan && state != UIGestureRecognizerStateChanged &&
+        state != UIGestureRecognizerStateEnded && state != UIGestureRecognizerStateCancelled) return;
+    CGPoint offset = [gesture translationInView:self.view];
+    [gesture setTranslation:CGPointZero inView:self.view];
+    NSString *phase = state == UIGestureRecognizerStateBegan ? @"start" :
+        state == UIGestureRecognizerStateChanged ? @"move" : @"end";
+    ECKWrite(@{@"kind":@"scroll", @"phase":phase,
+        @"dx":@(offset.x), @"dy":@(offset.y)});
+}
+// Observe indirect-pointer drag with the same UIKit coordinates as tap/hover,
+// preserving working calibrated clicks and leaving finger/Pencil unaffected.
+- (void)dragging:(UIPanGestureRecognizer *)gesture {
+    if (![self active]) return;
+    UIGestureRecognizerState state = gesture.state;
+    if (state == UIGestureRecognizerStateBegan) {
+        if (!(gesture.buttonMask & UIEventButtonMaskPrimary)) return;
+        self.indirectDragging = YES;
+        CGPoint point = [gesture locationInView:self.view];
+        CGPoint travel = [gesture translationInView:self.view];
+        CGPoint down = CGPointMake(point.x - travel.x, point.y - travel.y);
+        ECKWrite(@{@"kind":@"pointer", @"origin":@"uikit-primary-drag",
+            @"phase":@"start", @"x":@(down.x), @"y":@(down.y)});
+        ECKWrite(@{@"kind":@"pointer", @"origin":@"uikit-primary-drag",
+            @"phase":@"move", @"x":@(point.x), @"y":@(point.y)});
+    } else if (self.indirectDragging &&
+               (state == UIGestureRecognizerStateChanged || state == UIGestureRecognizerStateEnded ||
+                state == UIGestureRecognizerStateCancelled || state == UIGestureRecognizerStateFailed)) {
+        CGPoint point = [gesture locationInView:self.view];
+        NSString *phase = state == UIGestureRecognizerStateChanged ? @"move" :
+            state == UIGestureRecognizerStateCancelled ? @"cancel" : @"end";
+        ECKWrite(@{@"kind":@"pointer", @"origin":@"uikit-primary-drag",
+            @"phase":phase, @"x":@(point.x), @"y":@(point.y)});
+        if (state != UIGestureRecognizerStateChanged) self.indirectDragging = NO;
+    }
+}
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)a shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)b {
-    return [a isKindOfClass:UIHoverGestureRecognizer.class] || [b isKindOfClass:UIHoverGestureRecognizer.class];
+    return [a isKindOfClass:UIHoverGestureRecognizer.class] || [b isKindOfClass:UIHoverGestureRecognizer.class] ||
+        a == self.scroll || b == self.scroll || a == self.drag || b == self.drag;
 }
 @end
 static void ECKInstallPointer(UIView *view) {
@@ -241,6 +285,9 @@ static void ECKInstallPointer(UIView *view) {
     if (ECKMouse.hover) [ECKMouse.view removeGestureRecognizer:ECKMouse.hover];
     if (ECKMouse.primary) [ECKMouse.view removeGestureRecognizer:ECKMouse.primary];
     if (ECKMouse.secondary) [ECKMouse.view removeGestureRecognizer:ECKMouse.secondary];
+    if (ECKMouse.scroll) [ECKMouse.view removeGestureRecognizer:ECKMouse.scroll];
+    if (ECKMouse.drag) [ECKMouse.view removeGestureRecognizer:ECKMouse.drag];
+    ECKMouse.indirectDragging = NO;
     ECKMouse.view = view;
     UIHoverGestureRecognizer *hover = [[UIHoverGestureRecognizer alloc] initWithTarget:ECKMouse action:@selector(hovering:)];
     hover.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
@@ -266,6 +313,20 @@ static void ECKInstallPointer(UIView *view) {
     secondary.cancelsTouchesInView = YES;
     secondary.delegate = ECKMouse;
     [view addGestureRecognizer:secondary]; ECKMouse.secondary = secondary;
+    UIPanGestureRecognizer *scroll = [[UIPanGestureRecognizer alloc] initWithTarget:ECKMouse action:@selector(scrolling:)];
+    scroll.allowedTouchTypes = @[];
+    scroll.allowedScrollTypesMask = UIScrollTypeMaskContinuous | UIScrollTypeMaskDiscrete;
+    scroll.cancelsTouchesInView = NO;
+    scroll.delegate = ECKMouse;
+    [view addGestureRecognizer:scroll]; ECKMouse.scroll = scroll;
+    UIPanGestureRecognizer *drag = [[UIPanGestureRecognizer alloc] initWithTarget:ECKMouse action:@selector(dragging:)];
+    drag.allowedTouchTypes = @[@(UITouchTypeIndirectPointer)];
+    drag.allowedScrollTypesMask = 0;
+    drag.cancelsTouchesInView = NO;
+    drag.delaysTouchesBegan = NO;
+    drag.delaysTouchesEnded = NO;
+    drag.delegate = ECKMouse;
+    [view addGestureRecognizer:drag]; ECKMouse.drag = drag;
 }
 static void ECKActivate(void) {
     ECKInstall();
