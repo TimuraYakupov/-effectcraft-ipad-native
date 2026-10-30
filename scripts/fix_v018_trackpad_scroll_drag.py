@@ -59,6 +59,7 @@ def patch(root):
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(dx, dy),
                 phase,
+                source: egui::MouseWheelSource::Trackpad,
                 modifiers: self.modifiers,
             });
             return Ok(());
