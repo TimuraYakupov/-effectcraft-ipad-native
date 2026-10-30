@@ -29,10 +29,14 @@ def remove_green_overlay(source: str) -> str:
         '                ui.label("A green crosshair marks the last UIKit left-click for 10 seconds. Compare it with the visible cursor/layer row.");\n',
         '                ui.label("A green crosshair marks the last UIKit left-click for 10 seconds.");\n',
     ]
+    # Build 28 replaced the longer Build 27 hint with the short one.
+    # Remove whichever remains without making an already-replaced hint fatal.
     for label in labels:
-        if source.count(label) != 1:
-            raise RuntimeError(f"Green overlay label missing: {label}")
+        if source.count(label) > 1:
+            raise RuntimeError(f"Duplicate green overlay label: {label}")
         source = source.replace(label, "", 1)
+    if "A green crosshair marks" in source:
+        raise RuntimeError("Green crosshair hint still present after cleanup")
     return source
 
 
