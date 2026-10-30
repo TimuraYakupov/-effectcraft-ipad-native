@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-ipad-build28-${{ github.ref }}
+  group: native-ipad-build29-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
