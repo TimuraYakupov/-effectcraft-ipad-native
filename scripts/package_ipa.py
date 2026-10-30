@@ -32,7 +32,7 @@ def package(root: Path) -> Path:
         "CFBundleExecutable": "EffectCraftNative",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": source_version,
-        "CFBundleVersion": "29",
+        "CFBundleVersion": "30",
         "MinimumOSVersion": "16.0",
         "CFBundleIconFiles": ["AppIcon76x76", "AppIcon83.5x83.5"],
         "CFBundleIcons~ipad": {"CFBundlePrimaryIcon": {"CFBundleIconFiles": ["AppIcon76x76", "AppIcon83.5x83.5"]}},
@@ -66,7 +66,7 @@ def package(root: Path) -> Path:
     }
     out = root / "output"
     out.mkdir(exist_ok=True)
-    ipa = out / f"EffectCraft-{source_version}-iPad-Build-29.ipa"
+    ipa = out / f"EffectCraft-{source_version}-iPad-Build-30.ipa"
     prefix = "Payload/EffectCraftNative.app/"
     with zipfile.ZipFile(ipa, "w", zipfile.ZIP_DEFLATED) as archive:
         executable = zipfile.ZipInfo(prefix + "EffectCraftNative")
