@@ -152,7 +152,11 @@ def patch(root):
             return Ok(());
         }
 '''
-    s=once(s,marker,scroll_code+marker,"native two finger wheel decoding")
+    # The pointer branch also appears inside input() with deeper indentation.
+    # Only insert the wheel handler into record(), before the first branch.
+    if s.count(marker) != 2:
+        raise RuntimeError(f"Expected record() and input() pointer branches, got {s.count(marker)}")
+    s=s.replace(marker,scroll_code+marker,1)
     marker='            if let Some(down) = value["down"].as_bool() {'
     drag_code='''            if value["origin"].as_str() == Some("uikit-primary-drag") {
                 let phase = value["phase"].as_str().unwrap_or("move");
