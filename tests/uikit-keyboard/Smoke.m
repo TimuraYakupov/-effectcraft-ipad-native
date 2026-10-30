@@ -192,6 +192,14 @@ static void TestNativeTouchDelivery(UIView *view) {
                                     Check(ECKMouse.view==guest.view && ECKMouse.secondary.buttonMaskRequired==UIEventButtonMaskSecondary, @"hover and secondary click are installed on the guest view");
                                     Check(ECKMouse.primary && ECKMouse.primary.buttonMaskRequired==UIEventButtonMaskPrimary && ECKMouse.primary.delaysTouchesBegan && ECKMouse.primary.delaysTouchesEnded && ECKMouse.primary.cancelsTouchesInView, @"physical primary taps intercepted before displaced native touch events");
                                     Check(ECKMouse.primary.allowedTouchTypes.count==1 && [ECKMouse.primary.allowedTouchTypes[0] integerValue]==UITouchTypeIndirectPointer, @"only indirect pointer input is captured; finger and Pencil remain native");
+                                    Check(ECKMouse.scroll && ECKMouse.scroll.allowedScrollTypesMask == (UIScrollTypeMaskContinuous | UIScrollTypeMaskDiscrete),
+                                        @"UIKit handles continuous two finger trackpad scroll and discrete mouse wheel");
+                                    Check(ECKMouse.scroll.allowedTouchTypes.count==0 && !ECKMouse.scroll.cancelsTouchesInView,
+                                        @"scroll recognizer does not intercept direct finger/Pencil touches");
+                                    Check(ECKMouse.drag && ECKMouse.drag.allowedTouchTypes.count==1 &&
+                                        [ECKMouse.drag.allowedTouchTypes[0] integerValue]==UITouchTypeIndirectPointer &&
+                                        !ECKMouse.drag.cancelsTouchesInView && !ECKMouse.drag.delaysTouchesBegan,
+                                        @"drag recognizer observes only physical indirect pointer without cancelling native touch");
                                     TestPointer *pointer=[TestPointer new];pointer.point=CGPointMake(120,200);pointer.state=UIGestureRecognizerStateChanged;
                                     [ECKMouse hovering:(UIHoverGestureRecognizer *)(id)pointer];
                                     pointer.state=UIGestureRecognizerStateRecognized;[ECKMouse rightClick:(UITapGestureRecognizer *)(id)pointer];
