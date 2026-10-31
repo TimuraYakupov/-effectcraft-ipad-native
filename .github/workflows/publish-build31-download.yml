@@ -1,0 +1,56 @@
+name: Publish EffectCraft iPad Build 31 download
+
+on:
+  push:
+    branches:
+      - effectcraft-ipad-build-31-download
+    paths:
+      - .github/workflows/publish-build31-download.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish-download:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download successful Build 31 IPA from GitHub Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh run download 41132956429 -R "${GITHUB_REPOSITORY}" -n EffectCraft-Native-Preview -D dist
+      - name: Verify IPA integrity and expected Build 31 metadata
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,plistlib,zipfile,pathlib
+          d=pathlib.Path('dist')
+          p=d/'EffectCraft-0.18.0-iPad-Build-31.ipa'
+          expected='d83490ced2466c713c37fbccd857b9716e1553b15a077f13fe2f9b5c7f72ea1d'
+          assert p.is_file(), 'Expected IPA missing'
+          actual=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()
+          assert actual==expected, f'SHA-256 mismatch: {actual}'
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None,'Corrupt IPA ZIP'
+              info=plistlib.loads(z.read('Payload/EffectCraftNative.app/Info.plist'))
+              assert info['CFBundleVersion']=='31',info['CFBundleVersion']
+              assert info['CFBundleShortVersionString']=='0.18.0'
+          print('Verified EffectCraft iPad Build 31 IPA, SHA-256:',actual)
+          PY
+      - name: Publish downloadable IPA as GitHub Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view ipad-build-31 -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload ipad-build-31 dist/EffectCraft-0.18.0-iPad-Build-31.ipa -R "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create ipad-build-31 dist/EffectCraft-0.18.0-iPad-Build-31.ipa \
+              -R "${GITHUB_REPOSITORY}" \
+              --target effectcraft-ipad-build-31 \
+              --title "EffectCraft 0.18.0 — iPad Build 31 (unsigned IPA)" \
+              --notes "Unsigned experimental iPad ARM64 preview for existing LiveContainer users. Build 31: UIKit trackpad scroll and calibrated drag selection. No App Store signing; physical-device behavior needs validation. SHA-256: d83490ced2466c713c37fbccd857b9716e1553b15a077f13fe2f9b5c7f72ea1d" \
+              --latest=false
+          fi
+          gh release view ipad-build-31 -R "${GITHUB_REPOSITORY}" --json url,assets
