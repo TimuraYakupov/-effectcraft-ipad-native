@@ -28,6 +28,8 @@ if ! git -C effectcraft -c user.name="EffectCraft Native iPad CI" -c user.email=
     exit 1
 fi
 
+python3 scripts/fix_v021_disk_cache.py effectcraft
+
 python3 - <<'PY'
 import pathlib,re,subprocess
 root=pathlib.Path('effectcraft')
