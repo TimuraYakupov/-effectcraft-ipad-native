@@ -30,6 +30,46 @@ fi
 
 python3 scripts/fix_v021_disk_cache.py effectcraft
 
+# 0.21 introduces dedicated preview lanes. The native -X ours merge retains
+# the iPad pool customization but skips the lane/queue setup from upstream.
+# Restore only the missing initializers, preserving the iPad pool/cache.
+python3 - <<'PY'
+from pathlib import Path
+p=Path('effectcraft/crates/ui-egui/src/frames.rs')
+s=p.read_text()
+a=s.index('impl Default for Frames {')
+b=s.index('\n}\n', a)+2
+block=s[a:b]
+assert block.count('        Frames {') == 1, 'Unexpected Frames::default() layout'
+assert block.count('            queue: Arc::new(Mutex::new(queue)),') == 1
+assert block.count('            ctx: None,') == 1
+assert '    lanes: Vec<rayon::ThreadPool>,' in s, 'Upstream 0.21 preview lanes missing from struct'
+if '        let queue = Queue {' not in block:
+    init='''        #[cfg(not(target_arch = "wasm32"))]
+        let lanes: Vec<rayon::ThreadPool> = (0..threads)
+            .map_while(|i| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(1)
+                    .thread_name(move |_| format!("ec-preview-{i}"))
+                    .panic_handler(|_| log::error!("a frame render panicked; that frame was skipped"))
+                    .build()
+                    .ok()
+            })
+            .collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        let queue = Queue { idle_lanes: (0..lanes.len()).collect(), lanes: lanes.len(), ..Default::default() };
+        #[cfg(target_arch = "wasm32")]
+        let queue = Queue::default();
+'''
+    block=block.replace('        Frames {',init+'        Frames {',1)
+if '            lanes,\n' not in block:
+    block=block.replace('            ctx: None,','            #[cfg(not(target_arch = "wasm32"))]\n            lanes,\n            ctx: None,',1)
+assert '        let queue = Queue {' in block and '            lanes,\n' in block
+s=s[:a]+block+s[b:]
+p.write_text(s)
+print('Reconciled 0.21 frame priority queue and native iPad preview lanes', flush=True)
+PY
+
 python3 - <<'PY'
 import pathlib,re,subprocess
 root=pathlib.Path('effectcraft')
