@@ -49,6 +49,10 @@ if ! git -C effectcraft -c user.name="EffectCraft Native iPad CI" -c user.email=
   exit 1
 fi
 
+# Undo stale -X ours disk-cache code from the 0.21 overlay, retaining only
+# safe iPad memory/error limits on top of the coherent 0.23 implementation.
+python3 scripts/reconcile_v023_disk_cache.py effectcraft "${UPSTREAM_023}"
+
 python3 - <<'PY'
 import pathlib,re
 root=pathlib.Path('effectcraft')
