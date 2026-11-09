@@ -53,7 +53,7 @@ python3 - <<'PY'
 import pathlib,re
 root=pathlib.Path('effectcraft')
 manifest=(root/'Cargo.toml').read_text()
-assert re.search(r'(?m)^version = "0\\.23\\.0"$', manifest), 'Authentic upstream v0.23.0 missing'
+assert 'version = "0.23.0"' in manifest, 'Authentic upstream v0.23.0 missing'
 for rel in ['apps/effectcraft-ios/src/keyboard.rs', 'apps/effectcraft-ios/src/files.rs', 'crates/ui-egui/src/hooks.rs']:
     assert (root/rel).is_file(), f'Lost iPad bridge: {rel}'
 kbd=(root/'apps/effectcraft-ios/src/keyboard.rs').read_text()
