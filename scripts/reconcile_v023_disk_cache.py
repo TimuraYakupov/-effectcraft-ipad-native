@@ -67,6 +67,27 @@ def main(root: Path, commit: str) -> None:
         '        let (max, limit) = (self.max_bytes(), self.limit_bytes());',
     )
 
+    # The native diagnostic panel still uses can_prefetch() to explain why
+    # disk prefetch is paused. Preserve that API using the v0.23 effective
+    # free-space cap rather than only the older max_bytes setting.
+    before = "struct Meta {"
+    if original.count(before) != 1:
+        raise RuntimeError("Unexpected v0.23 DiskStats/Meta boundary")
+    original = original.replace(
+        before,
+        """impl DiskStats {
+    /// Leave room for the next cached frame, including the disk free-space
+    /// reserve introduced upstream; suspend after an I/O write failure.
+    pub fn can_prefetch(&self) -> bool {
+        let limit = self.limit_bytes.min(self.max_bytes);
+        self.errors == 0 && limit > 0 && self.bytes < limit.saturating_sub(limit / 10)
+    }
+}
+
+struct Meta {""",
+        1,
+    )
+
     target.write_text(original, encoding="utf-8")
     print(
         "Reconciled complete upstream 0.23 cache: file stamps, queue priority, "
