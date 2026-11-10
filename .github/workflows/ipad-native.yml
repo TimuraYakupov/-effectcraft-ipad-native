@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-ipad-v023-build33-${{ github.ref }}
+  group: native-ipad-v023-build34-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -109,10 +109,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  publish-build33:
-    name: Publish Build 33 IPA to GitHub Releases
+  publish-build34:
+    name: Publish Build 34 IPA to GitHub Releases
     needs: [native-frontend-tests, native-ipad]
-    if: ${{ github.ref == 'refs/heads/effectcraft-ipad-v023-build-33' }}
+    if: ${{ github.ref == 'refs/heads/effectcraft-ipad-v023-build-34' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -127,29 +127,29 @@ jobs:
           from pathlib import Path
           import json,hashlib,zipfile,plistlib
           root=Path("dist")
-          ipa=root/"EffectCraft-0.23.0-iPad-Build-33.ipa"
-          assert ipa.is_file(), "Native v0.23.0 Build 33 IPA missing"
+          ipa=root/"EffectCraft-0.23.0-iPad-Build-34.ipa"
+          assert ipa.is_file(), "Native v0.23.0 Build 34 IPA missing"
           checksums=json.loads((root/"SHA256.json").read_text())
           assert hashlib.file_digest(ipa.open("rb"),"sha256").hexdigest()==checksums[ipa.name]
           with zipfile.ZipFile(ipa) as z:
               assert z.testzip() is None, "IPA corrupt"
               info=plistlib.loads(z.read("Payload/EffectCraftNative.app/Info.plist"))
-              assert info["CFBundleVersion"] == "33" and info["CFBundleShortVersionString"] == "0.23.0"
+              assert info["CFBundleVersion"] == "34" and info["CFBundleShortVersionString"] == "0.23.0"
               assert info["CFBundleIdentifier"] == "com.effectcraft.ipad.nativepreview"
-          print("Verified native EffectCraft 0.23.0 Build 33")
+          print("Verified native EffectCraft 0.23.0 Build 34")
           PY
       - name: Publish direct IPA link without GitHub Actions artifact expiry
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view ipad-v023-build-33 -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload ipad-v023-build-33 dist/EffectCraft-0.23.0-iPad-Build-33.ipa -R "${GITHUB_REPOSITORY}" --clobber
+          if gh release view ipad-v023-build-34 -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload ipad-v023-build-34 dist/EffectCraft-0.23.0-iPad-Build-34.ipa -R "${GITHUB_REPOSITORY}" --clobber
           else
-            gh release create ipad-v023-build-33 dist/EffectCraft-0.23.0-iPad-Build-33.ipa \
+            gh release create ipad-v023-build-34 dist/EffectCraft-0.23.0-iPad-Build-34.ipa \
               -R "${GITHUB_REPOSITORY}" \
-              --target effectcraft-ipad-v023-build-33 \
-              --title "EffectCraft 0.23.0 — native iPad Build 33 (unsigned IPA)" \
+              --target effectcraft-ipad-v023-build-34 \
+              --title "EffectCraft 0.23.0 — native iPad Build 34 (unsigned IPA)" \
               --notes "Native EffectCraft v0.23.0 port for iPad, retaining the working v0.18 device bridges, trackpad pointer fixes, two-finger scrolling, files, fonts and caches. Experimental unsigned IPA for LiveContainer, not App Store signed. CI passed; physical iPad functionality still requires confirmation." \
               --latest=false
           fi
-          gh release view ipad-v023-build-33 -R "${GITHUB_REPOSITORY}" --json url,assets
+          gh release view ipad-v023-build-34 -R "${GITHUB_REPOSITORY}" --json url,assets
